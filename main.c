@@ -103,25 +103,32 @@ int joinPartAndPartsuppByPartkey(){
     initHT(vmPCM, 256);
     int index;
     void *page = NULL, *lastIndex = NULL;
-    part *pitem = (part*)scratchMemoryLeft;
-    part *tuplePtr;
-    for(index=0; index<4; index++){
-        insertHashEntry((void*)&(pitem[index]), 
-                        (char*)&(pitem[index].p_partkey), 
-                        sizeof(pitem[index].p_partkey));
-        printf("[index:%d partkey:%d] Inserted at :%p\n", index, pitem[index].p_partkey
-                                                       ,&(pitem[index]));
-        page = NULL, lastIndex = NULL;
-        while(searchHashEntry((char*)&(pitem[index].p_partkey), 
-                        sizeof(pitem[index].p_partkey),
-                        (void**)&tuplePtr, &page, &lastIndex) == 1){
-            printf("Found at :%p\n", tuplePtr);
-        }
-        
-            //printf("Not found \n");
-        
+    part *pitem = (part*) scratchMemoryLeft;
+    for (index = 0; index < scratchMemoryLeftCount; index++) {
+        insertHashEntry((void*) &(pitem[index]),
+                (char*) &(pitem[index].p_partkey),
+                sizeof (pitem[index].p_partkey));
+        //printf("[index:%d partkey:%d] Inserted at :%p\n", index, pitem[index].p_partkey
+          //      , &(pitem[index]));
     }
-    
+    part *tuplePtr;
+    partsupp *psitem = (partsupp*) scratchMemoryRight;
+    printf("Joins\n");
+    for (index = 0; index < scratchMemoryRightCount; index++) {
+        page = NULL, lastIndex = NULL;
+        while (searchHashEntry((char*) &(psitem[index].ps_partkey),
+                sizeof (psitem[index].ps_partkey),
+                (void**) &tuplePtr, &page, &lastIndex) == 1) {
+            if (tuplePtr->p_partkey == psitem[index].ps_partkey) {
+                printf("partkey[%d]\n", psitem[index].ps_partkey);
+            }
+        }
+
+
+        //printf("Not found \n");
+
+    }
+
     
 }
 
