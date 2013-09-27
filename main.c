@@ -15,6 +15,8 @@
 #include "hashTable.h"
 
 #define FILTERED_S_SUPPKEY_COUNT 4
+UINT32 scratchMemoryLeftCount;
+UINT32 scratchMemoryRightCount;
 
 char *scratchMemoryLeft;
 char *scratchMemoryRight;
@@ -27,7 +29,7 @@ int scanAndFilterPartTable(){
     part *pitem = (part*)vmalloc(vmPCM, sizeof(part));
     FILE *fpIn = fopen(PART_TABLE_FILE, "r");
     part *pitemScratch = (part*)scratchMemoryLeft;
-    UINT32 count = 0;
+    scratchMemoryLeftCount = 0;
     int ret=fread(pitem, sizeof(*pitem), 1, fpIn);
     while(ret != 0){
         if( strncmp(pitem->p_brand, "Brand#35", 8) != 0 &&
@@ -41,7 +43,7 @@ int scanAndFilterPartTable(){
                 pitem->p_size == 2 ||
                 pitem->p_size == 20)){
             
-                pitemScratch[count++] = *pitem; 
+                pitemScratch[scratchMemoryLeftCount++] = *pitem; 
         }
         ret=fread(pitem, sizeof(*pitem), 1, fpIn);
     }
@@ -69,9 +71,9 @@ int scanAndFilterPartsupplierTable(){
     partsupp *psitem = (partsupp*)vmalloc(vmPCM, sizeof(partsupp));
     FILE *fpPartsupp = fopen(PARTSUPPLIER_TABLE_FILE, "r");
     partsupp *psitemScratch = (partsupp*)scratchMemoryRight;
-    UINT32 count = 0,
-            index;
+    UINT32 index;
     BOOL discard;
+    scratchMemoryRightCount = 0;
     int ret=fread(psitem, sizeof(*psitem), 1, fpPartsupp);
     while(ret != 0){
         discard = 0;
@@ -82,20 +84,44 @@ int scanAndFilterPartsupplierTable(){
             } 
         }
         if (!discard){
-            psitemScratch[count++] = *psitem; 
+            psitemScratch[scratchMemoryRightCount++] = *psitem; 
         }
             
       ret=fread(psitem, sizeof(*psitem), 1, fpPartsupp);  
     }
-    for(index=0; index<count; index++){
-        printf("%d\n ", psitemScratch[index].ps_availqty);
+#if 0
+    part * pitemScratch = (part*)scratchMemoryLeft;
+    for(index=0; index<scratchMemoryLeftCount; index++){
+        printf("%d\n ", pitemScratch[index].p_partkey);
     }
+#endif
     fclose(fpPartsupp);
     vmfree(vmPCM, psitem);
 }
 
 int joinPartAndPartsuppByPartkey(){
     initHT(vmPCM, 256);
+    int index;
+    void *page = NULL, *lastIndex = NULL;
+    part *pitem = (part*)scratchMemoryLeft;
+    part *tuplePtr;
+    for(index=0; index<4; index++){
+        insertHashEntry((void*)&(pitem[index]), 
+                        (char*)&(pitem[index].p_partkey), 
+                        sizeof(pitem[index].p_partkey));
+        printf("[index:%d partkey:%d] Inserted at :%p\n", index, pitem[index].p_partkey
+                                                       ,&(pitem[index]));
+        page = NULL, lastIndex = NULL;
+        while(searchHashEntry((char*)&(pitem[index].p_partkey), 
+                        sizeof(pitem[index].p_partkey),
+                        (void**)&tuplePtr, &page, &lastIndex) == 1){
+            printf("Found at :%p\n", tuplePtr);
+        }
+        
+            //printf("Not found \n");
+        
+    }
+    
     
 }
 
@@ -119,6 +145,7 @@ int main(int argc, char** argv) {
     scanAndFilterPartTable();
     scanAndFilterSupplierTable();
     scanAndFilterPartsupplierTable();
+    joinPartAndPartsuppByPartkey();
     //SimBegin();
     //SimEnd();
     return (EXIT_SUCCESS);
