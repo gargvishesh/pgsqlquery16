@@ -17,6 +17,7 @@
 #include "vmalloc.h"
 #include "hashTable.h"
 #include "pcm_ptlsim.h"
+#include "sorting.h"
 
 #define FILTERED_S_SUPPKEY_COUNT 4
 UINT32 scratchMemoryLeftCount;
@@ -155,6 +156,73 @@ int joinPartAndPartsuppByPartkey(){
     }
     SimBegin();
 }
+int comparePartPartSuppJoinElem(const void *p1, const void *p2){
+    part_partsupp_join_struct ptr1 = *(part_partsupp_join_struct*)p1;
+    part_partsupp_join_struct ptr2 = *(part_partsupp_join_struct*)p2;
+    
+    int brandComparison = strncmp(ptr1.p_brand, ptr2.p_brand, sizeof(ptr1.p_brand));
+    if(brandComparison != 0){
+        return brandComparison;
+    }
+    
+    int typeComparison = strncmp(ptr1.p_type, ptr2.p_type, sizeof(ptr1.p_type));
+    if(typeComparison != 0){
+        return typeComparison;
+    }
+    
+    int sizeComparison = ptr1.p_size - ptr2.p_size;
+    if(sizeComparison != 0){
+        return sizeComparison;
+    }
+    return 0;
+    
+}
+void sortByBrandTypeSize(){
+    /*Debug purpose only*/
+    scratchMemoryOutCount = 1000;
+    part_partsupp_join_struct *inputTuples = scratchMemoryOut;
+     
+    /********************/
+    sortMultiPivotAndUndo(scratchMemoryOut, 
+            scratchMemoryOutCount, 
+            sizeof(part_partsupp_join_struct), 
+            comparePartPartSuppJoinElem,
+            scratchMemoryLeft);
+    /**********Debug Purpose Only***************/
+    
+    int i;
+    int remainingSize = scratchMemoryOutCount;
+    char *currOutPtr = scratchMemoryLeft;
+    int currSize;
+    int *pos;
+    part_partsupp_join_struct *tuples;
+
+    printf("\n ===Final Array====\n");
+    while (remainingSize > 0) {
+        currSize = *(int*) currOutPtr;
+        pos = currOutPtr + sizeof (UINT32);
+        tuples = (char*) pos + currSize * sizeof (int);
+#if 0
+        printf("CurrSize: %d\n", currSize);
+        printf("Set of Pos\n");
+        for (i = 0; i < currSize; i++) {
+            printf("Pos : %d\n", pos[i]);
+        }
+#endif
+#if 1
+        for (i = 0; i < currSize; i++) {
+            printf("Brand: %s Type: %s, Size: %d\n", tuples[pos[i]].p_brand,
+                    tuples[pos[i]].p_type,
+                    tuples[pos[i]].p_size);
+        }
+#endif
+        /* We have to jump both pos array and tuples array
+         * One extra UINT32 size jump to jump the size parameter itself*/
+        currOutPtr += currSize * (sizeof(part_partsupp_join_struct) + sizeof (UINT32)) + sizeof (UINT32);
+        remainingSize -= currSize;
+    }
+    /******************Debug End ***************/
+}
 
 void init(){
     scratchMemoryLeft = (char*)malloc(SCRATCH_MEMORY_SIZE);
@@ -184,6 +252,7 @@ int main(int argc, char** argv) {
     printf("scanAndFilterPartsupplierTable Over\n");
     joinPartAndPartsuppByPartkey();
     printf("joinPartAndPartsuppByPartkey Over\n");
+    sortByBrandTypeSize();
     SimEnd();
     return (EXIT_SUCCESS);
 }
