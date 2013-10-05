@@ -9,17 +9,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <sys/fcntl.h>
+#include <sys/types.h>
+
 #include "globals.h"
 #include "parseStructs.h"
 #include "vmalloc.h"
 #include "hashTable.h"
+#include "pcm_ptlsim.h"
 
 #define FILTERED_S_SUPPKEY_COUNT 4
 UINT32 scratchMemoryLeftCount;
 UINT32 scratchMemoryRightCount;
+UINT32 scratchMemoryOutCount;
 
 char *scratchMemoryLeft;
 char *scratchMemoryRight;
+char *scratchMemoryOut;
 char *pcmMemory;
 int filtered_s_suppkey[FILTERED_S_SUPPKEY_COUNT];
 
@@ -29,6 +35,7 @@ int scanAndFilterPartTable(){
     part *pitem = (part*)vmalloc(vmPCM, sizeof(part));
     FILE *fpIn = fopen(PART_TABLE_FILE, "r");
     part *pitemScratch = (part*)scratchMemoryLeft;
+    printf("pitem Add:%p\n", pitem);
     scratchMemoryLeftCount = 0;
     int ret=fread(pitem, sizeof(*pitem), 1, fpIn);
     while(ret != 0){
@@ -100,10 +107,13 @@ int scanAndFilterPartsupplierTable(){
 }
 
 int joinPartAndPartsuppByPartkey(){
-    initHT(vmPCM, 256);
+    initHT(vmPCM, BUCKET_COUNT, OPT_ENTRIES_PER_PAGE);
     int index;
     void *page = NULL, *lastIndex = NULL;
     part *pitem = (part*) scratchMemoryLeft;
+    printf("Join:[LeftRecordCount:%d, RightRecordCount:%d]\n", 
+            scratchMemoryLeftCount,
+            scratchMemoryRightCount);
     for (index = 0; index < scratchMemoryLeftCount; index++) {
         insertHashEntry((void*) &(pitem[index]),
                 (char*) &(pitem[index].p_partkey),
@@ -113,32 +123,48 @@ int joinPartAndPartsuppByPartkey(){
     }
     part *tuplePtr;
     partsupp *psitem = (partsupp*) scratchMemoryRight;
-    printf("Joins\n");
+    part_partsupp_join_struct *ppjsitem = (part_partsupp_join_struct*)scratchMemoryOut;
+    scratchMemoryOutCount = 0;
+    printf("Done Inserting. Now Joins\n");
+    /*Ending Simulation because simulator crashing at some instruction here*/
+    SimEnd();
     for (index = 0; index < scratchMemoryRightCount; index++) {
         page = NULL, lastIndex = NULL;
+        if(index%100 == 0){
+            printf("Completed: %d\n", index);
+        }
         while (searchHashEntry((char*) &(psitem[index].ps_partkey),
                 sizeof (psitem[index].ps_partkey),
                 (void**) &tuplePtr, &page, &lastIndex) == 1) {
+            
             if (tuplePtr->p_partkey == psitem[index].ps_partkey) {
-                printf("partkey[%d]\n", psitem[index].ps_partkey);
+                
+                strncpy(ppjsitem[scratchMemoryOutCount].p_brand ,
+                        tuplePtr->p_brand, 
+                        sizeof(ppjsitem[scratchMemoryOutCount].p_brand));
+                ppjsitem[scratchMemoryOutCount].p_size = tuplePtr->p_size;
+                strncpy(ppjsitem[scratchMemoryOutCount].p_type, 
+                        tuplePtr->p_type, 
+                        sizeof(ppjsitem[scratchMemoryOutCount].p_type));
+                ppjsitem[scratchMemoryOutCount].ps_suppkey = psitem[index].ps_suppkey;
+                
+                scratchMemoryOutCount++;
             }
         }
 
-
-        //printf("Not found \n");
-
     }
-
-    
+    SimBegin();
 }
 
 void init(){
     scratchMemoryLeft = (char*)malloc(SCRATCH_MEMORY_SIZE);
     scratchMemoryRight = (char*)malloc(SCRATCH_MEMORY_SIZE);
+    scratchMemoryOut = (char*)malloc(SCRATCH_MEMORY_SIZE);
     
     pcmMemory = (char*)malloc(PCM_MEMORY_SIZE);
     vmPCM = vmemopen(pcmMemory, PCM_MEMORY_SIZE, 0);
-    //PCMRange((int)pcmMemory, (int)(pcmMemory + PCM_MEMORY_SIZE));
+    PCMRange((unsigned long long)pcmMemory, (unsigned long long)(pcmMemory + PCM_MEMORY_SIZE));
+    printf("PCM Range Set to [Beg:%p End:%p]\n", pcmMemory, (pcmMemory + PCM_MEMORY_SIZE));
     
     
     
@@ -149,12 +175,16 @@ void init(){
  */
 int main(int argc, char** argv) {
     init();
+    SimBegin();
     scanAndFilterPartTable();
+    printf("scanAndFilterPartTable Over\n");
     scanAndFilterSupplierTable();
+    printf("scanAndFilterSupplierTable Over\n");
     scanAndFilterPartsupplierTable();
+    printf("scanAndFilterPartsupplierTable Over\n");
     joinPartAndPartsuppByPartkey();
-    //SimBegin();
-    //SimEnd();
+    printf("joinPartAndPartsuppByPartkey Over\n");
+    SimEnd();
     return (EXIT_SUCCESS);
 }
 
