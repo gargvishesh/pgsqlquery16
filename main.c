@@ -146,7 +146,7 @@ int joinPartAndPartsuppByPartkey(){
     scratchMemoryOutCount = 0;
     printf("Done Inserting. Now Joins\n");
     /*Ending Simulation because simulator crashing at some instruction here*/
-    SimEnd();
+    //SimEnd();
     for (index = 0; index < scratchMemoryRightCount; index++) {
         lastPage = NULL, lastIndex = NULL;
         if(index%100 == 0){
@@ -172,10 +172,12 @@ int joinPartAndPartsuppByPartkey(){
         }
 
     }
-    SimBegin();
+    //SimBegin();
     freeHashTable();
 }
 int comparePartPartSuppJoinElem(const void *p1, const void *p2){
+    assert(p1 != NULL);
+    assert(p2 != NULL);
     part_partsupp_join_struct ptr1 = *(part_partsupp_join_struct*)p1;
     part_partsupp_join_struct ptr2 = *(part_partsupp_join_struct*)p2;
     
@@ -197,14 +199,10 @@ int comparePartPartSuppJoinElem(const void *p1, const void *p2){
     
 }
 void sortByBrandTypeSize(){
-    /*Debug purpose only*/
-    scratchMemoryOutCount = 1000;
     part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryOut;
-     
-    /********************/
-    sortMultiPivotAndUndo(scratchMemoryOut, 
+    sortMultiPivotAndUndo(vmPCM, inputTuples, 
             scratchMemoryOutCount, 
-            sizeof(part_partsupp_join_struct), 
+            sizeof(*inputTuples), 
             comparePartPartSuppJoinElem,
             scratchMemoryLeft);
     /**********Debug Purpose Only***************/
@@ -242,6 +240,29 @@ void sortByBrandTypeSize(){
     }
     /******************Debug End ***************/
 }
+void sortSimple(){
+    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryOut;
+    qsort(inputTuples, scratchMemoryOutCount, sizeof(*inputTuples), comparePartPartSuppJoinElem);
+    int i;
+    for(i=0; i<scratchMemoryOutCount;i++){
+        printf("Brand: %s Type: %s, Size: %d\n", inputTuples[i].p_brand,
+                    inputTuples[i].p_type,
+                    inputTuples[i].p_size);
+    }
+}
+
+aggregateSorteditems(part_partsupp_join_struct *inputTuples, int inputCount, part_partsupp_join_struct * outputBuffer, int* outputCount){
+    int i;
+    *outputCount = 0;
+    outputBuffer[(*outputCount)++] = inputTuples[0];
+    for(i=1; i<inputCount; i++){
+        if( comparePartPartSuppJoinElem(&(inputTuples[i]), &(inputTuples[i-1]))!= 0){
+            outputBuffer[(*outputCount)++] = inputTuples[i];
+        }
+    }
+        printf("aggregateCount :%d", *outputCount);
+    
+}
 
 void init(){
     
@@ -266,13 +287,19 @@ void init(){
     
     
 }
-
+void flushDRAM(){
+char *dram_array = (char*) malloc(DRAM_MEMORY_SIZE);
+int sum = 0, i;
+for(i=0; i<DRAM_MEMORY_SIZE; i++){
+        sum += dram_array[i];
+}
+printf("Flushing Sum: %d\n", sum);
+}
 /*
  * 
  */
 int main(int argc, char** argv) {
     init();
-    SimBegin();
     scanAndFilterPartTable();
     printf("scanAndFilterPartTable Over\n");
     scanAndFilterSupplierTable();
@@ -281,7 +308,11 @@ int main(int argc, char** argv) {
     printf("scanAndFilterPartsupplierTable Over\n");
     joinPartAndPartsuppByPartkey();
     printf("joinPartAndPartsuppByPartkey Over\n");
+    //SimBegin();
     sortByBrandTypeSize();
+    //sortSimple();
+    aggregateSorteditems();
+    flushDRAM();
     SimEnd();
     return (EXIT_SUCCESS);
 }
