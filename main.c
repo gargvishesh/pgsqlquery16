@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 #include <sys/fcntl.h>
 #include <sys/types.h>
@@ -32,42 +33,61 @@ char *pcmMemory;
 int filtered_s_suppkey[FILTERED_S_SUPPKEY_COUNT];
 
 Vmalloc_t *vmPCM; 
+typedef struct projectedPartItem
+{
+	UINT32 p_partkey;
+	char p_brand[11];
+	char p_type[26];
+	UINT32 p_size;
+	
+}projectedPartItem;
+
+typedef struct projectedPartsuppItem
+{
+	UINT32 ps_partkey;
+	UINT32 ps_suppkey;
+	UINT32 ps_availqty;
+	float ps_supplycost;
+	char ps_comment[200];
+}projectedPartsuppItem;
 
 int scanAndFilterPartTable(){
-    part *pitem = (part*)vmalloc(vmPCM, sizeof(part));
+    part pitem;
     int fpIn = open(PART_TABLE_FILE, O_RDONLY);
-    part *pitemScratch = (part*)scratchMemoryLeft;
-    printf("pitem Add:%p\n", pitem);
+    projectedPartItem *pitemScratch = (projectedPartItem*)scratchMemoryLeft;
     scratchMemoryLeftCount = 0;
-    while(read(fpIn, pitem, sizeof(*pitem)* 1) != 0){
-        if( strncmp(pitem->p_brand, "Brand#35", 8) != 0 &&
-                strstr(pitem->p_type, "ECONOMY BURNISHED") == NULL &&
-                (pitem->p_size == 14 ||
-                pitem->p_size == 7 ||
-                pitem->p_size == 21 ||
-                pitem->p_size == 24 ||
-                pitem->p_size == 35 ||
-                pitem->p_size == 33 ||
-                pitem->p_size == 2 ||
-                pitem->p_size == 20)){
+    while(read(fpIn, &pitem, sizeof(pitem)* 1) != 0){
+        if( strncmp(pitem.p_brand, "Brand#35", 8) != 0 &&
+                strstr(pitem.p_type, "ECONOMY BURNISHED") == NULL &&
+                (pitem.p_size == 14 ||
+                pitem.p_size == 7 ||
+                pitem.p_size == 21 ||
+                pitem.p_size == 24 ||
+                pitem.p_size == 35 ||
+                pitem.p_size == 33 ||
+                pitem.p_size == 2 ||
+                pitem.p_size == 20)){
             
-                pitemScratch[scratchMemoryLeftCount++] = *pitem; 
+                strncpy(pitemScratch[scratchMemoryLeftCount].p_brand, pitem.p_brand, sizeof(pitem.p_brand));
+                pitemScratch[scratchMemoryLeftCount].p_partkey = pitem.p_partkey;
+                pitemScratch[scratchMemoryLeftCount].p_size = pitem.p_size;
+                strncpy(pitemScratch[scratchMemoryLeftCount].p_type, pitem.p_type, sizeof(pitem.p_type));
+                scratchMemoryLeftCount++;
         }
     }
     close(fpIn);
-    vmfree(vmPCM, pitem);
 }
 int scanAndFilterSupplierTable(){
     /*We have used grep to find the s_suppkey of lines matching 
      * '%Customer%Complaints' and put it into an array. This is because 
      * this saves a lot of hassles in computing such expression in C. */ 
     
-    supplier *sitem = (supplier*)vmalloc(vmPCM, sizeof(supplier));
-    int fpSupp = open(SUPPLIER_TABLE_FILE, O_RDONLY);
+    //supplier *sitem = (supplier*)vmalloc(vmPCM, sizeof(supplier));
+    //int fpSupp = open(SUPPLIER_TABLE_FILE, O_RDONLY);
     
     /*Dummy reads to just increase PCM write count */ 
-    while(read(fpSupp, sitem, sizeof(*sitem)* 1) != 0);
-    close(fpSupp);
+    //while(read(fpSupp, sitem, sizeof(*sitem)* 1) != 0);
+    //close(fpSupp);
     filtered_s_suppkey[0] = 358;
     filtered_s_suppkey[1] = 2820;
     filtered_s_suppkey[2] = 3804;
@@ -75,22 +95,25 @@ int scanAndFilterSupplierTable(){
 }
 
 int scanAndFilterPartsupplierTable(){
-    partsupp *psitem = (partsupp*)vmalloc(vmPCM, sizeof(partsupp));
+    partsupp psitem;
+    
     int fpPartsupp = open(PARTSUPPLIER_TABLE_FILE, O_RDONLY);
-    partsupp *psitemScratch = (partsupp*)scratchMemoryRight;
+    projectedPartsuppItem *psitemScratch = (projectedPartsuppItem*)scratchMemoryRight;
     UINT32 index;
     BOOL discard;
     scratchMemoryRightCount = 0;
-    while(read(fpPartsupp, psitem, sizeof(*psitem)*1) != 0){
+    while(read(fpPartsupp, &psitem, sizeof(psitem)*1) != 0){
         discard = 0;
         for(index=0; index<FILTERED_S_SUPPKEY_COUNT; index++){
-            if(psitem->ps_suppkey == filtered_s_suppkey[index]){
+            if(psitem.ps_suppkey == filtered_s_suppkey[index]){
                 discard = 1;
                 break;
             } 
         }
         if (!discard){
-            psitemScratch[scratchMemoryRightCount++] = *psitem; 
+            psitemScratch[scratchMemoryRightCount].ps_suppkey = psitem.ps_suppkey;
+            psitemScratch[scratchMemoryRightCount].ps_partkey = psitem.ps_partkey;
+            scratchMemoryRightCount++;
         }
     }
 #if 0
@@ -100,14 +123,13 @@ int scanAndFilterPartsupplierTable(){
     }
 #endif
     close(fpPartsupp);
-    vmfree(vmPCM, psitem);
 }
 
 int joinPartAndPartsuppByPartkey(){
     initHT(vmPCM, BUCKET_COUNT, OPT_ENTRIES_PER_PAGE);
     int index;
-    void *page = NULL, *lastIndex = NULL;
-    part *pitem = (part*) scratchMemoryLeft;
+    void *lastPage = NULL, *lastIndex = NULL;
+    projectedPartItem *pitem = (projectedPartItem*) scratchMemoryLeft;
     printf("Join:[LeftRecordCount:%d, RightRecordCount:%d]\n", 
             scratchMemoryLeftCount,
             scratchMemoryRightCount);
@@ -118,21 +140,21 @@ int joinPartAndPartsuppByPartkey(){
         //printf("[index:%d partkey:%d] Inserted at :%p\n", index, pitem[index].p_partkey
           //      , &(pitem[index]));
     }
-    part *tuplePtr;
-    partsupp *psitem = (partsupp*) scratchMemoryRight;
+    projectedPartItem *tuplePtr;
+    projectedPartsuppItem *psitem = (projectedPartsuppItem*) scratchMemoryRight;
     part_partsupp_join_struct *ppjsitem = (part_partsupp_join_struct*)scratchMemoryOut;
     scratchMemoryOutCount = 0;
     printf("Done Inserting. Now Joins\n");
     /*Ending Simulation because simulator crashing at some instruction here*/
     SimEnd();
     for (index = 0; index < scratchMemoryRightCount; index++) {
-        page = NULL, lastIndex = NULL;
+        lastPage = NULL, lastIndex = NULL;
         if(index%100 == 0){
             printf("Completed: %d\n", index);
         }
         while (searchHashEntry((char*) &(psitem[index].ps_partkey),
                 sizeof (psitem[index].ps_partkey),
-                (void**) &tuplePtr, &page, &lastIndex) == 1) {
+                (void**) &tuplePtr, &lastPage, &lastIndex) == 1) {
             
             if (tuplePtr->p_partkey == psitem[index].ps_partkey) {
                 
@@ -222,12 +244,22 @@ void sortByBrandTypeSize(){
 }
 
 void init(){
-    scratchMemoryLeft = (char*)malloc(SCRATCH_MEMORY_SIZE);
-    scratchMemoryRight = (char*)malloc(SCRATCH_MEMORY_SIZE);
-    scratchMemoryOut = (char*)malloc(SCRATCH_MEMORY_SIZE);
     
     pcmMemory = (char*)malloc(PCM_MEMORY_SIZE);
+    assert (pcmMemory != NULL);
+    
     vmPCM = vmemopen(pcmMemory, PCM_MEMORY_SIZE, 0);
+    assert(vmPCM != NULL);
+    
+    scratchMemoryLeft = (char*)vmalloc(vmPCM, SCRATCH_MEMORY_SIZE);
+    assert(scratchMemoryLeft != NULL);
+    
+    scratchMemoryRight = (char*)vmalloc(vmPCM, SCRATCH_MEMORY_SIZE);
+    assert(scratchMemoryRight != NULL);
+    
+    scratchMemoryOut = (char*)vmalloc(vmPCM, SCRATCH_MEMORY_SIZE);
+    assert(scratchMemoryOut != NULL);
+    
     PCMRange((unsigned long long)pcmMemory, (unsigned long long)(pcmMemory + PCM_MEMORY_SIZE));
     //printf("PCM Range Set to [Beg:%p End:%p]\n", pcmMemory, (pcmMemory + PCM_MEMORY_SIZE));
     
