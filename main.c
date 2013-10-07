@@ -18,6 +18,7 @@
 #include "hashTable.h"
 #include "pcm_ptlsim.h"
 #include "sorting.h"
+#include "constants.h"
 
 #define FILTERED_S_SUPPKEY_COUNT 4
 UINT32 scratchMemoryLeftCount;
@@ -34,12 +35,11 @@ Vmalloc_t *vmPCM;
 
 int scanAndFilterPartTable(){
     part *pitem = (part*)vmalloc(vmPCM, sizeof(part));
-    FILE *fpIn = fopen(PART_TABLE_FILE, "r");
+    int fpIn = open(PART_TABLE_FILE, O_RDONLY);
     part *pitemScratch = (part*)scratchMemoryLeft;
     printf("pitem Add:%p\n", pitem);
     scratchMemoryLeftCount = 0;
-    int ret=fread(pitem, sizeof(*pitem), 1, fpIn);
-    while(ret != 0){
+    while(read(fpIn, pitem, sizeof(*pitem)* 1) != 0){
         if( strncmp(pitem->p_brand, "Brand#35", 8) != 0 &&
                 strstr(pitem->p_type, "ECONOMY BURNISHED") == NULL &&
                 (pitem->p_size == 14 ||
@@ -53,9 +53,8 @@ int scanAndFilterPartTable(){
             
                 pitemScratch[scratchMemoryLeftCount++] = *pitem; 
         }
-        ret=fread(pitem, sizeof(*pitem), 1, fpIn);
     }
-    fclose(fpIn);
+    close(fpIn);
     vmfree(vmPCM, pitem);
 }
 int scanAndFilterSupplierTable(){
@@ -64,11 +63,11 @@ int scanAndFilterSupplierTable(){
      * this saves a lot of hassles in computing such expression in C. */ 
     
     supplier *sitem = (supplier*)vmalloc(vmPCM, sizeof(supplier));
-    FILE *fpSupp = fopen(SUPPLIER_TABLE_FILE, "r");
+    int fpSupp = open(SUPPLIER_TABLE_FILE, O_RDONLY);
     
     /*Dummy reads to just increase PCM write count */ 
-    while(fread(sitem, sizeof(*sitem), 1, fpSupp) != 0);
-    
+    while(read(fpSupp, sitem, sizeof(*sitem)* 1) != 0);
+    close(fpSupp);
     filtered_s_suppkey[0] = 358;
     filtered_s_suppkey[1] = 2820;
     filtered_s_suppkey[2] = 3804;
@@ -77,13 +76,12 @@ int scanAndFilterSupplierTable(){
 
 int scanAndFilterPartsupplierTable(){
     partsupp *psitem = (partsupp*)vmalloc(vmPCM, sizeof(partsupp));
-    FILE *fpPartsupp = fopen(PARTSUPPLIER_TABLE_FILE, "r");
+    int fpPartsupp = open(PARTSUPPLIER_TABLE_FILE, O_RDONLY);
     partsupp *psitemScratch = (partsupp*)scratchMemoryRight;
     UINT32 index;
     BOOL discard;
     scratchMemoryRightCount = 0;
-    int ret=fread(psitem, sizeof(*psitem), 1, fpPartsupp);
-    while(ret != 0){
+    while(read(fpPartsupp, psitem, sizeof(*psitem)*1) != 0){
         discard = 0;
         for(index=0; index<FILTERED_S_SUPPKEY_COUNT; index++){
             if(psitem->ps_suppkey == filtered_s_suppkey[index]){
@@ -94,8 +92,6 @@ int scanAndFilterPartsupplierTable(){
         if (!discard){
             psitemScratch[scratchMemoryRightCount++] = *psitem; 
         }
-            
-      ret=fread(psitem, sizeof(*psitem), 1, fpPartsupp);  
     }
 #if 0
     part * pitemScratch = (part*)scratchMemoryLeft;
@@ -103,7 +99,7 @@ int scanAndFilterPartsupplierTable(){
         printf("%d\n ", pitemScratch[index].p_partkey);
     }
 #endif
-    fclose(fpPartsupp);
+    close(fpPartsupp);
     vmfree(vmPCM, psitem);
 }
 
@@ -155,6 +151,7 @@ int joinPartAndPartsuppByPartkey(){
 
     }
     SimBegin();
+    freeHashTable();
 }
 int comparePartPartSuppJoinElem(const void *p1, const void *p2){
     part_partsupp_join_struct ptr1 = *(part_partsupp_join_struct*)p1;
@@ -180,7 +177,7 @@ int comparePartPartSuppJoinElem(const void *p1, const void *p2){
 void sortByBrandTypeSize(){
     /*Debug purpose only*/
     scratchMemoryOutCount = 1000;
-    part_partsupp_join_struct *inputTuples = scratchMemoryOut;
+    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryOut;
      
     /********************/
     sortMultiPivotAndUndo(scratchMemoryOut, 
@@ -200,8 +197,8 @@ void sortByBrandTypeSize(){
     printf("\n ===Final Array====\n");
     while (remainingSize > 0) {
         currSize = *(int*) currOutPtr;
-        pos = currOutPtr + sizeof (UINT32);
-        tuples = (char*) pos + currSize * sizeof (int);
+        pos = (int *)(currOutPtr + sizeof (UINT32));
+        tuples = (part_partsupp_join_struct*)((char*) pos + currSize * sizeof (int));
 #if 0
         printf("CurrSize: %d\n", currSize);
         printf("Set of Pos\n");
@@ -232,7 +229,7 @@ void init(){
     pcmMemory = (char*)malloc(PCM_MEMORY_SIZE);
     vmPCM = vmemopen(pcmMemory, PCM_MEMORY_SIZE, 0);
     PCMRange((unsigned long long)pcmMemory, (unsigned long long)(pcmMemory + PCM_MEMORY_SIZE));
-    printf("PCM Range Set to [Beg:%p End:%p]\n", pcmMemory, (pcmMemory + PCM_MEMORY_SIZE));
+    //printf("PCM Range Set to [Beg:%p End:%p]\n", pcmMemory, (pcmMemory + PCM_MEMORY_SIZE));
     
     
     
