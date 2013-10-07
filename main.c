@@ -51,6 +51,13 @@ typedef struct projectedPartsuppItem
 	char ps_comment[200];
 }projectedPartsuppItem;
 
+typedef struct aggregated_part_partsupp_join{
+        char p_brand[11];
+        char p_type[26];
+        UINT32 p_size;
+        UINT32 distinct_ps_suppkey;
+}aggregated_part_partsupp_join;
+
 int scanAndFilterPartTable(){
     part pitem;
     int fpIn = open(PART_TABLE_FILE, O_RDONLY);
@@ -198,8 +205,10 @@ int comparePartPartSuppJoinElem(const void *p1, const void *p2){
     return 0;
     
 }
-void sortByBrandTypeSize(){
+void sortByBrandTypeSizeAndAggregate(){
     part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryOut;
+    aggregated_part_partsupp_join tempAggregatedOuputTuple ;
+    aggregated_part_partsupp_join *aggregatedOuputTuples = (aggregated_part_partsupp_join*)scratchMemoryLeft;
     sortMultiPivotAndUndo(vmPCM, inputTuples, 
             scratchMemoryOutCount, 
             sizeof(*inputTuples), 
@@ -212,7 +221,9 @@ void sortByBrandTypeSize(){
     char *currOutPtr = scratchMemoryLeft;
     int currSize;
     int *pos;
-    part_partsupp_join_struct *tuples;
+    part_partsupp_join_struct *tuples, currTuple, lastTuple;
+    UINT32 aggregateCount = 0;
+    UINT32 distinctSuppkeyCount = 0;
 
     printf("\n ===Final Array====\n");
     while (remainingSize > 0) {
@@ -226,11 +237,31 @@ void sortByBrandTypeSize(){
             printf("Pos : %d\n", pos[i]);
         }
 #endif
+        
 #if 1
         for (i = 0; i < currSize; i++) {
-            printf("Brand: %s Type: %s, Size: %d\n", tuples[pos[i]].p_brand,
-                    tuples[pos[i]].p_type,
-                    tuples[pos[i]].p_size);
+            //printf("Brand: %s Type: %s, Size: %d\n", tuples[pos[i]].p_brand,
+                   // tuples[pos[i]].p_type,
+                    //tuples[pos[i]].p_size);
+            strncpy(tempAggregatedOuputTuple.p_brand, tuples[pos[i]].p_brand, sizeof(tuples[pos[i]].p_brand));
+            strncpy(tempAggregatedOuputTuple.p_type, tuples[pos[i]].p_type, sizeof(tuples[pos[i]].p_type));
+            tempAggregatedOuputTuple.p_size = tuples[pos[i]].p_size;
+            i++;
+            distinctSuppkeyCount=1;
+            while((i<currSize) && 
+                   ((strncmp(tuples[pos[i]].p_brand, tuples[pos[i-1]].p_brand, sizeof(tuples[pos[i]].p_brand)) == 0) &&
+                    (strncmp(tuples[pos[i]].p_type, tuples[pos[i-1]].p_type, sizeof(tuples[pos[i]].p_type)) == 0) &&
+                    (tuples[pos[i]].p_size == tuples[pos[i-1]].p_size))){
+                
+                if(tuples[pos[i]].ps_suppkey != tuples[pos[i-1]].ps_suppkey){
+                    distinctSuppkeyCount++;
+                }
+                i++;
+            }
+            i--;
+            tempAggregatedOuputTuple.distinct_ps_suppkey = distinctSuppkeyCount;
+            aggregatedOuputTuples[aggregateCount] = tempAggregatedOuputTuple;
+            aggregateCount++;
         }
 #endif
         /* We have to jump both pos array and tuples array
@@ -238,17 +269,43 @@ void sortByBrandTypeSize(){
         currOutPtr += currSize * (sizeof(part_partsupp_join_struct) + sizeof (UINT32)) + sizeof (UINT32);
         remainingSize -= currSize;
     }
+    printf("aggregateCount :%d", aggregateCount);
     /******************Debug End ***************/
 }
-void sortSimple(){
+void sortSimpleAndAggregate(){
     part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryOut;
+    aggregated_part_partsupp_join tempAggregatedOuputTuple ;
+    aggregated_part_partsupp_join *aggregatedOuputTuples = (aggregated_part_partsupp_join*)scratchMemoryLeft;
+    UINT32 aggregateCount = 0;
+    UINT32 distinctSuppkeyCount = 0;
+    
     qsort(inputTuples, scratchMemoryOutCount, sizeof(*inputTuples), comparePartPartSuppJoinElem);
     int i;
     for(i=0; i<scratchMemoryOutCount;i++){
         printf("Brand: %s Type: %s, Size: %d\n", inputTuples[i].p_brand,
                     inputTuples[i].p_type,
                     inputTuples[i].p_size);
+        strncpy(tempAggregatedOuputTuple.p_brand, inputTuples[i].p_brand, sizeof(inputTuples[i].p_brand));
+            strncpy(tempAggregatedOuputTuple.p_type, inputTuples[i].p_type, sizeof(inputTuples[i].p_type));
+            tempAggregatedOuputTuple.p_size = inputTuples[i].p_size;
+            i++;
+            distinctSuppkeyCount=1;
+            while((i<scratchMemoryOutCount) && 
+                   ((strncmp(inputTuples[i].p_brand, inputTuples[i-1].p_brand, sizeof(inputTuples[i].p_brand)) == 0) &&
+                    (strncmp(inputTuples[i].p_type, inputTuples[i-1].p_type, sizeof(inputTuples[i].p_type)) == 0) &&
+                    (inputTuples[i].p_size == inputTuples[i-1].p_size))){
+                
+                if(inputTuples[i].ps_suppkey != inputTuples[i-1].ps_suppkey){
+                    distinctSuppkeyCount++;
+                }
+                i++;
+            }
+            i--;
+            tempAggregatedOuputTuple.distinct_ps_suppkey = distinctSuppkeyCount;
+            aggregatedOuputTuples[aggregateCount] = tempAggregatedOuputTuple;
+            aggregateCount++;
     }
+    printf("aggregateCount :%d", aggregateCount);
 }
 
 aggregateSorteditems(part_partsupp_join_struct *inputTuples, int inputCount, part_partsupp_join_struct * outputBuffer, int* outputCount){
@@ -309,9 +366,9 @@ int main(int argc, char** argv) {
     joinPartAndPartsuppByPartkey();
     printf("joinPartAndPartsuppByPartkey Over\n");
     //SimBegin();
-    sortByBrandTypeSize();
-    //sortSimple();
-    aggregateSorteditems();
+    //sortByBrandTypeSizeAndAggregate();
+    sortSimpleAndAggregate();
+//    aggregateSorteditems();
     flushDRAM();
     SimEnd();
     return (EXIT_SUCCESS);
