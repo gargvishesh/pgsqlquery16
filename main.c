@@ -25,13 +25,13 @@
 #define POSTGRES_QUERY 0
 #define OPTIMIZED_QUERY 1
 
-UINT32 scratchMemoryLeftCount;
-UINT32 scratchMemoryRightCount;
-UINT32 scratchMemoryOutCount;
+UINT32 scratchMemoryOneCount;
+UINT32 scratchMemoryTwoCount;
+UINT32 scratchMemoryThreeCount;
 
-char *scratchMemoryLeft;
-char *scratchMemoryRight;
-char *scratchMemoryOut;
+char *scratchMemoryOne;
+char *scratchMemoryTwo;
+char *scratchMemoryThree;
 char *pcmMemory;
 int filtered_s_suppkey[FILTERED_S_SUPPKEY_COUNT];
 
@@ -64,8 +64,8 @@ typedef struct aggregated_part_partsupp_join{
 int scanAndFilterPartTable(){
     part pitem;
     int fpIn = open(PART_TABLE_FILE, O_RDONLY);
-    projectedPartItem *pitemScratch = (projectedPartItem*)scratchMemoryLeft;
-    scratchMemoryLeftCount = 0;
+    projectedPartItem *pitemScratch = (projectedPartItem*)scratchMemoryOne;
+    scratchMemoryOneCount = 0;
     while(read(fpIn, &pitem, sizeof(pitem)* 1) != 0){
         if( strncmp(pitem.p_brand, "Brand#35", 8) != 0 &&
                 strstr(pitem.p_type, "ECONOMY BURNISHED") == NULL &&
@@ -78,11 +78,11 @@ int scanAndFilterPartTable(){
                 pitem.p_size == 2 ||
                 pitem.p_size == 20)){
             
-                strncpy(pitemScratch[scratchMemoryLeftCount].p_brand, pitem.p_brand, sizeof(pitem.p_brand));
-                pitemScratch[scratchMemoryLeftCount].p_partkey = pitem.p_partkey;
-                pitemScratch[scratchMemoryLeftCount].p_size = pitem.p_size;
-                strncpy(pitemScratch[scratchMemoryLeftCount].p_type, pitem.p_type, sizeof(pitem.p_type));
-                scratchMemoryLeftCount++;
+                strncpy(pitemScratch[scratchMemoryOneCount].p_brand, pitem.p_brand, sizeof(pitem.p_brand));
+                pitemScratch[scratchMemoryOneCount].p_partkey = pitem.p_partkey;
+                pitemScratch[scratchMemoryOneCount].p_size = pitem.p_size;
+                strncpy(pitemScratch[scratchMemoryOneCount].p_type, pitem.p_type, sizeof(pitem.p_type));
+                scratchMemoryOneCount++;
         }
     }
     close(fpIn);
@@ -108,10 +108,10 @@ int scanAndFilterPartsupplierTable(){
     partsupp psitem;
     
     int fpPartsupp = open(PARTSUPPLIER_TABLE_FILE, O_RDONLY);
-    projectedPartsuppItem *psitemScratch = (projectedPartsuppItem*)scratchMemoryRight;
+    projectedPartsuppItem *psitemScratch = (projectedPartsuppItem*)scratchMemoryTwo;
     UINT32 index;
     BOOL discard;
-    scratchMemoryRightCount = 0;
+    scratchMemoryTwoCount = 0;
     while(read(fpPartsupp, &psitem, sizeof(psitem)*1) != 0){
         discard = 0;
         for(index=0; index<FILTERED_S_SUPPKEY_COUNT; index++){
@@ -121,14 +121,14 @@ int scanAndFilterPartsupplierTable(){
             } 
         }
         if (!discard){
-            psitemScratch[scratchMemoryRightCount].ps_suppkey = psitem.ps_suppkey;
-            psitemScratch[scratchMemoryRightCount].ps_partkey = psitem.ps_partkey;
-            scratchMemoryRightCount++;
+            psitemScratch[scratchMemoryTwoCount].ps_suppkey = psitem.ps_suppkey;
+            psitemScratch[scratchMemoryTwoCount].ps_partkey = psitem.ps_partkey;
+            scratchMemoryTwoCount++;
         }
     }
 #if 0
-    part * pitemScratch = (part*)scratchMemoryLeft;
-    for(index=0; index<scratchMemoryLeftCount; index++){
+    part * pitemScratch = (part*)scratchMemoryOne;
+    for(index=0; index<scratchMemoryOneCount; index++){
         printf("%d\n ", pitemScratch[index].p_partkey);
     }
 #endif
@@ -145,11 +145,11 @@ int joinPartAndPartsuppByPartkey(UINT8 queryType){
     
     int index;
     void *lastPage = NULL, *lastIndex = NULL;
-    projectedPartItem *pitem = (projectedPartItem*) scratchMemoryLeft;
+    projectedPartItem *pitem = (projectedPartItem*) scratchMemoryOne;
     printf("Join:[LeftRecordCount:%d, RightRecordCount:%d]\n", 
-            scratchMemoryLeftCount,
-            scratchMemoryRightCount);
-    for (index = 0; index < scratchMemoryLeftCount; index++) {
+            scratchMemoryOneCount,
+            scratchMemoryTwoCount);
+    for (index = 0; index < scratchMemoryOneCount; index++) {
         insertHashEntry((void*) &(pitem[index]),
                 (char*) &(pitem[index].p_partkey),
                 sizeof (pitem[index].p_partkey));
@@ -157,13 +157,13 @@ int joinPartAndPartsuppByPartkey(UINT8 queryType){
           //      , &(pitem[index]));
     }
     projectedPartItem *tuplePtr;
-    projectedPartsuppItem *psitem = (projectedPartsuppItem*) scratchMemoryRight;
-    part_partsupp_join_struct *ppjsitem = (part_partsupp_join_struct*)scratchMemoryOut;
-    scratchMemoryOutCount = 0;
+    projectedPartsuppItem *psitem = (projectedPartsuppItem*) scratchMemoryTwo;
+    part_partsupp_join_struct *ppjsitem = (part_partsupp_join_struct*)scratchMemoryThree;
+    scratchMemoryThreeCount = 0;
     printf("Done Inserting. Now Joins\n");
     /*Ending Simulation because simulator crashing at some instruction here*/
     SimEnd();
-    for (index = 0; index < scratchMemoryRightCount; index++) {
+    for (index = 0; index < scratchMemoryTwoCount; index++) {
         lastPage = NULL, lastIndex = NULL;
 //            printf("Completed: %d\n", index);
 //        if(index%100 == 0){
@@ -174,16 +174,16 @@ int joinPartAndPartsuppByPartkey(UINT8 queryType){
             
             if (tuplePtr->p_partkey == psitem[index].ps_partkey) {
                 
-                strncpy(ppjsitem[scratchMemoryOutCount].p_brand ,
+                strncpy(ppjsitem[scratchMemoryThreeCount].p_brand ,
                         tuplePtr->p_brand, 
-                        sizeof(ppjsitem[scratchMemoryOutCount].p_brand));
-                ppjsitem[scratchMemoryOutCount].p_size = tuplePtr->p_size;
-                strncpy(ppjsitem[scratchMemoryOutCount].p_type, 
+                        sizeof(ppjsitem[scratchMemoryThreeCount].p_brand));
+                ppjsitem[scratchMemoryThreeCount].p_size = tuplePtr->p_size;
+                strncpy(ppjsitem[scratchMemoryThreeCount].p_type, 
                         tuplePtr->p_type, 
-                        sizeof(ppjsitem[scratchMemoryOutCount].p_type));
-                ppjsitem[scratchMemoryOutCount].ps_suppkey = psitem[index].ps_suppkey;
+                        sizeof(ppjsitem[scratchMemoryThreeCount].p_type));
+                ppjsitem[scratchMemoryThreeCount].ps_suppkey = psitem[index].ps_suppkey;
                 
-                scratchMemoryOutCount++;
+                scratchMemoryThreeCount++;
             }
         }
 
@@ -215,23 +215,23 @@ int comparePartPartSuppJoinElem(const void *p1, const void *p2){
     
 }
 void sortByBrandTypeSizeAndAggregate(){
-    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryOut;
-    part_partsupp_join_struct *outputTuples = (part_partsupp_join_struct*)scratchMemoryOut;
+    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryThree;
+    part_partsupp_join_struct *outputTuples = (part_partsupp_join_struct*)scratchMemoryThree;
     
     aggregated_part_partsupp_join tempAggregatedOuputTuple ;
     /*This stores the location where final aggregated tuples will reside*/
-    aggregated_part_partsupp_join *aggregatedOuputTuples = (aggregated_part_partsupp_join*)scratchMemoryLeft;
+    aggregated_part_partsupp_join *aggregatedOuputTuples = (aggregated_part_partsupp_join*)scratchMemoryOne;
     sortMultiPivotAndUndo(vmPCM, inputTuples, 
-            scratchMemoryOutCount, 
+            scratchMemoryThreeCount, 
             sizeof(*inputTuples), 
             comparePartPartSuppJoinElem,
-            scratchMemoryRight,
+            scratchMemoryTwo,
             100, 6000);
     /**********Debug Purpose Only***************/
     
     int i;
-    int remainingSize = scratchMemoryOutCount;
-    char *currOutPtr = scratchMemoryRight;
+    int remainingSize = scratchMemoryThreeCount;
+    char *currOutPtr = scratchMemoryTwo;
     int currSize;
     int *positions;
     UINT32 aggregateCount = 0;
@@ -289,19 +289,19 @@ void sortByBrandTypeSizeAndAggregate(){
     }
     SimBegin();
     //SimEnd();
-    scratchMemoryLeftCount = aggregateCount;
+    scratchMemoryOneCount = aggregateCount;
     /******************Debug End ***************/
 }
 void PG_sortSimpleAndAggregate(){
-    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryOut;
+    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryThree;
     aggregated_part_partsupp_join tempAggregatedOuputTuple ;
-    aggregated_part_partsupp_join *aggregatedOuputTuples = (aggregated_part_partsupp_join*)scratchMemoryLeft;
+    aggregated_part_partsupp_join *aggregatedOuputTuples = (aggregated_part_partsupp_join*)scratchMemoryOne;
     UINT32 aggregateCount = 0;
     UINT32 distinctSuppkeyCount = 0;
     
-    qsort(inputTuples, scratchMemoryOutCount, sizeof(*inputTuples), comparePartPartSuppJoinElem);
+    qsort(inputTuples, scratchMemoryThreeCount, sizeof(*inputTuples), comparePartPartSuppJoinElem);
     int i;
-    for(i=0; i<scratchMemoryOutCount;i++){
+    for(i=0; i<scratchMemoryThreeCount;i++){
         //printf("Brand: %s Type: %s, Size: %d\n", inputTuples[i].p_brand,
                     //inputTuples[i].p_type,
                     //inputTuples[i].p_size);
@@ -310,7 +310,7 @@ void PG_sortSimpleAndAggregate(){
             tempAggregatedOuputTuple.p_size = inputTuples[i].p_size;
             i++;
             distinctSuppkeyCount=1;
-            while((i<scratchMemoryOutCount) && 
+            while((i<scratchMemoryThreeCount) && 
                    ((strncmp(inputTuples[i].p_brand, inputTuples[i-1].p_brand, sizeof(inputTuples[i].p_brand)) == 0) &&
                     (strncmp(inputTuples[i].p_type, inputTuples[i-1].p_type, sizeof(inputTuples[i].p_type)) == 0) &&
                     (inputTuples[i].p_size == inputTuples[i-1].p_size))){
@@ -325,7 +325,7 @@ void PG_sortSimpleAndAggregate(){
             aggregatedOuputTuples[aggregateCount] = tempAggregatedOuputTuple;
             aggregateCount++;
     }
-    scratchMemoryLeftCount = aggregateCount;
+    scratchMemoryOneCount = aggregateCount;
 }
 int compareAggregatedPartPartsuppJoinElem(const void *p1, const void *p2){
     assert(p1 != NULL);
@@ -356,10 +356,10 @@ int compareAggregatedPartPartsuppJoinElem(const void *p1, const void *p2){
     return 0;
 }
 void PG_sortFinal(){
-    aggregated_part_partsupp_join *inputTuples = (aggregated_part_partsupp_join*)scratchMemoryLeft;
-    qsort(inputTuples, scratchMemoryLeftCount, sizeof(*inputTuples), compareAggregatedPartPartsuppJoinElem);
+    aggregated_part_partsupp_join *inputTuples = (aggregated_part_partsupp_join*)scratchMemoryOne;
+    qsort(inputTuples, scratchMemoryOneCount, sizeof(*inputTuples), compareAggregatedPartPartsuppJoinElem);
     int i;
-    for(i=0; i<scratchMemoryLeftCount;i++){
+    for(i=0; i<scratchMemoryOneCount;i++){
         //printf("Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", inputTuples[i].p_brand,
           //          inputTuples[i].p_type,
             //        inputTuples[i].p_size, 
@@ -371,17 +371,17 @@ void PG_sortFinal(){
 }
 
 void sortFinal(){
-    aggregated_part_partsupp_join *inputTuples = (aggregated_part_partsupp_join*)scratchMemoryLeft;
-    aggregated_part_partsupp_join *sortedOutputTuples = (aggregated_part_partsupp_join*)scratchMemoryLeft;
+    aggregated_part_partsupp_join *inputTuples = (aggregated_part_partsupp_join*)scratchMemoryOne;
+    aggregated_part_partsupp_join *sortedOutputTuples = (aggregated_part_partsupp_join*)scratchMemoryOne;
     
     sortMultiPivotAndUndo(vmPCM, inputTuples, 
-            scratchMemoryLeftCount, 
+            scratchMemoryOneCount, 
             sizeof(*inputTuples), 
             compareAggregatedPartPartsuppJoinElem,
-            scratchMemoryRight, 
+            scratchMemoryTwo, 
             40, 8000);
-    int remainingSize = scratchMemoryLeftCount;
-    char *currOutPtr = scratchMemoryRight;
+    int remainingSize = scratchMemoryOneCount;
+    char *currOutPtr = scratchMemoryTwo;
     int currSize;
     int *positions;
     int i;
@@ -423,14 +423,14 @@ void init(){
     vmPCM = vmemopen(pcmMemory, PCM_MEMORY_SIZE, 0);
     assert(vmPCM != NULL);
     
-    scratchMemoryLeft = (char*)vmalloc(vmPCM, SCRATCH_MEMORY_SIZE);
-    assert(scratchMemoryLeft != NULL);
+    scratchMemoryOne = (char*)vmalloc(vmPCM, SCRATCH_MEMORY_SIZE);
+    assert(scratchMemoryOne != NULL);
     
-    scratchMemoryRight = (char*)vmalloc(vmPCM, SCRATCH_MEMORY_SIZE);
-    assert(scratchMemoryRight != NULL);
+    scratchMemoryTwo = (char*)vmalloc(vmPCM, SCRATCH_MEMORY_SIZE);
+    assert(scratchMemoryTwo != NULL);
     
-    scratchMemoryOut = (char*)vmalloc(vmPCM, SCRATCH_MEMORY_SIZE);
-    assert(scratchMemoryOut != NULL);
+    scratchMemoryThree = (char*)vmalloc(vmPCM, SCRATCH_MEMORY_SIZE);
+    assert(scratchMemoryThree != NULL);
     
     PCMRange((unsigned long long)pcmMemory, (unsigned long long)(pcmMemory + PCM_MEMORY_SIZE));
     //printf("PCM Range Set to [Beg:%p End:%p]\n", pcmMemory, (pcmMemory + PCM_MEMORY_SIZE));
