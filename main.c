@@ -20,6 +20,8 @@
 #include "pcm_ptlsim.h"
 #include "sorting.h"
 #include "constants.h"
+#include "GB_hashTable.h"
+#include "GeneralHashFunctions.h"
 
 #define FILTERED_S_SUPPKEY_COUNT 4
 #define POSTGRES_QUERY 0
@@ -29,10 +31,14 @@ UINT32 scratchMemoryOneCount;
 UINT32 scratchMemoryTwoCount;
 UINT32 scratchMemoryThreeCount;
 
+UINT32 bucketCountForAggregation;
+
 char *scratchMemoryOne;
 char *scratchMemoryTwo;
 char *scratchMemoryThree;
 char *pcmMemory;
+part_partsupp_join_struct *inputTupleStart;
+
 int filtered_s_suppkey[FILTERED_S_SUPPKEY_COUNT];
 
 Vmalloc_t *vmPCM; 
@@ -213,6 +219,133 @@ int comparePartPartSuppJoinElem(const void *p1, const void *p2){
     }
     return 0;
     
+}
+UINT32 hashValue(UINT32 rid){
+    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)inputTupleStart;
+    char *p_type = inputTuples[rid].p_type;
+    UINT32 size = sizeof(inputTuples[rid].p_type);
+    UINT32 hash = PJWHash(p_type, size);
+    return ((PJWHash(p_type, size) & HASH_MASK) >> HASH_SHIFT);
+}
+UINT32 bucketId(UINT32 rid) {
+    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)inputTupleStart;
+    char *p_type = inputTuples[rid].p_type;
+    UINT32 size = sizeof(inputTuples[rid].p_type);
+    return (PJWHash(p_type, size) % BUCKET_COUNT_FOR_AGG);
+}
+UINT32 compareRidOverall(UINT32 rid1, UINT32 rid2){
+    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)inputTupleStart;
+    part_partsupp_join_struct ptr1 = inputTuples[rid1];
+    part_partsupp_join_struct ptr2 = inputTuples[rid2];
+#if 0
+        printf("ptr1 Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", ptr1.p_brand,
+                    ptr1.p_type,
+                    ptr1.p_size,
+                    ptr1.ps_suppkey);
+    printf("ptr2 Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", ptr2.p_brand,
+                    ptr2.p_type,
+                    ptr2.p_size,
+                    ptr2.ps_suppkey);
+#endif
+    int ps_suppkey_comparison = ptr1.ps_suppkey - ptr2.ps_suppkey;
+    
+    if(ps_suppkey_comparison != 0){
+        return -(ps_suppkey_comparison);
+    }
+    
+    int brandComparison = strncmp(ptr1.p_brand, ptr2.p_brand, sizeof(ptr1.p_brand));
+    if(brandComparison != 0){
+        return brandComparison;
+    }
+    
+    int typeComparison = strncmp(ptr1.p_type, ptr2.p_type, sizeof(ptr1.p_type));
+    if(typeComparison != 0){
+        return typeComparison;
+    }
+    
+    int sizeComparison = ptr1.p_size - ptr2.p_size;
+    if(sizeComparison != 0){
+        return sizeComparison;
+    }
+    return 0;
+}
+UINT32 compareRidWithoutSuppkey(UINT32 rid1, UINT32 rid2){
+    part_partsupp_join_struct ptr1 = inputTupleStart[rid1];
+    part_partsupp_join_struct ptr2 = inputTupleStart[rid2];
+    //printf("ptr1 Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", ptr1.p_brand,
+            //        ptr1.p_type,
+            //        ptr1.p_size,
+            //        ptr1.ps_suppkey);
+    //printf("ptr2 Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", ptr2.p_brand,
+                //    ptr2.p_type,
+                //    ptr2.p_size,
+                  //  ptr2.ps_suppkey);
+    int brandComparison = strncmp(ptr1.p_brand, ptr2.p_brand, sizeof(ptr1.p_brand));
+    if(brandComparison != 0){
+        return brandComparison;
+    }
+    
+    int typeComparison = strncmp(ptr1.p_type, ptr2.p_type, sizeof(ptr1.p_type));
+    if(typeComparison != 0){
+        return typeComparison;
+    }
+    
+    int sizeComparison = ptr1.p_size - ptr2.p_size;
+    if(sizeComparison != 0){
+        return sizeComparison;
+    }
+    printf("rid:%d and rid:%d match\n", rid1, rid2);
+    return 0;
+}
+void aggregateByGB(){
+        //UINT32 ARRAY[] = {5,1,2,3,6,4, 5, 6};
+    
+    
+#define NUM_PASS 1
+    GB_initHT(vmPCM, BUCKET_COUNT_FOR_AGG, 64, 4192, NUM_PASS, bucketId, hashValue, compareRidOverall);
+    assert(vmPCM != NULL);
+    UINT32 pass,
+            j;
+    inputTupleStart = (part_partsupp_join_struct*)scratchMemoryThree;
+    for(pass=0; pass<NUM_PASS; pass++){
+    for(j=0; j<scratchMemoryThreeCount; j++){
+    //for(j=0; j<100; j++){
+        //printf("Handling rid [%d] Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", j, inputTupleStart[j].p_brand,
+                    //inputTupleStart[j].p_type,
+                    //inputTupleStart[j].p_size,
+                    //inputTupleStart[j].ps_suppkey);    
+        GB_searchNoUpdateAndInsert(j, pass);
+    }
+    }
+    GB_printMemoryRec(scratchMemoryOne, &scratchMemoryOneCount);
+    
+    
+    GB_freePages();
+    
+    UINT32 *semiAggTuplesPos = (UINT32*) scratchMemoryOne;
+    GB_changeRIDComparison(compareRidWithoutSuppkey);
+    inputTupleStart = scratchMemoryThree;
+    for(pass=0; pass<NUM_PASS; pass++){
+    for(j=0; j<scratchMemoryOneCount; j++){
+        GB_searchUpdateAndInsert(semiAggTuplesPos[2*j], pass);
+    }
+    }
+    GB_printMemoryRec(scratchMemoryTwo, &scratchMemoryTwoCount);
+    
+    aggregated_part_partsupp_join *aggregatedOuputTuples = (aggregated_part_partsupp_join*)scratchMemoryOne;
+    aggregated_part_partsupp_join tempAggregatedOuputTuple;
+    semiAggTuplesPos = (UINT32*)scratchMemoryTwo; 
+    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)inputTupleStart;
+    for(j=0; j<scratchMemoryTwoCount; j++){
+        strncpy(tempAggregatedOuputTuple.p_brand, inputTuples[semiAggTuplesPos[2*j]].p_brand, sizeof(tempAggregatedOuputTuple.p_brand));
+            strncpy(tempAggregatedOuputTuple.p_type, inputTuples[semiAggTuplesPos[2*j]].p_type, sizeof(tempAggregatedOuputTuple.p_type));
+            tempAggregatedOuputTuple.p_size = inputTuples[semiAggTuplesPos[2*j]].p_size;
+            tempAggregatedOuputTuple.distinct_ps_suppkey = semiAggTuplesPos[(2*j)+1];
+            aggregatedOuputTuples[j] = tempAggregatedOuputTuple;
+    }
+    scratchMemoryOneCount = scratchMemoryTwoCount;
+    GB_freeHashTable();
+    return;
 }
 void sortByBrandTypeSizeAndAggregate(){
     part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryThree;
@@ -481,8 +614,11 @@ optimizedQueryExecution(){
     printf("scanAndFilterPartsupplierTable Over\n");
     joinPartAndPartsuppByPartkey(OPTIMIZED_QUERY);
     printf("joinPartAndPartsuppByPartkey Over\n");
-    sortByBrandTypeSizeAndAggregate();
-    printf("sortByBrandTypeSizeAndAggregate Over\n");
+//    sortByBrandTypeSizeAndAggregate();
+//    printf("sortByBrandTypeSizeAndAggregate Over\n");
+    aggregateByGB();
+    printf("aggregateByGB over\n");
+    
     sortFinal();
     flushDRAM();
     SimEnd();
