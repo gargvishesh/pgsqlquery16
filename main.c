@@ -22,6 +22,7 @@
 #include "constants.h"
 #include "GB_hashTable.h"
 #include "GeneralHashFunctions.h"
+#include "clock.h"
 
 #define FILTERED_S_SUPPKEY_COUNT 4
 #define POSTGRES_QUERY 0
@@ -30,12 +31,16 @@
 UINT32 scratchMemoryOneCount;
 UINT32 scratchMemoryTwoCount;
 UINT32 scratchMemoryThreeCount;
+UINT32 scratchMemoryFourCount;
+
 
 UINT32 bucketCountForAggregation;
 
 char *scratchMemoryOne;
 char *scratchMemoryTwo;
 char *scratchMemoryThree;
+char *scratchMemoryFour;
+
 char *pcmMemory;
 part_partsupp_join_struct *inputTupleStart;
 
@@ -169,6 +174,7 @@ int joinPartAndPartsuppByPartkey(UINT8 queryType){
     printf("Done Inserting. Now Joins\n");
     /*Ending Simulation because simulator crashing at some instruction here*/
     SimEnd();
+    start_counter();
     for (index = 0; index < scratchMemoryTwoCount; index++) {
         lastPage = NULL, lastIndex = NULL;
 //            printf("Completed: %d\n", index);
@@ -194,6 +200,8 @@ int joinPartAndPartsuppByPartkey(UINT8 queryType){
         }
 
     }
+    double cycles = get_counter();
+    printf("Join Cycles %d", cycles);
     SimBegin();
     freeHashTable();
 }
@@ -302,48 +310,67 @@ void aggregateByGB(){
     
     
 #define NUM_PASS 1
+    //GB_initHT(vmPCM, BUCKET_COUNT_FOR_AGG, 16, 4192, NUM_PASS, bucketId, hashValue, compareRidOverall);
     GB_initHT(vmPCM, BUCKET_COUNT_FOR_AGG, 64, 4192, NUM_PASS, bucketId, hashValue, compareRidOverall);
+    
     assert(vmPCM != NULL);
     UINT32 pass,
             j;
+    UINT32 lastCount = 0;
     inputTupleStart = (part_partsupp_join_struct*)scratchMemoryThree;
-    for(pass=0; pass<NUM_PASS; pass++){
     for(j=0; j<scratchMemoryThreeCount; j++){
+        printf("Handling rid [%d] Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", j, inputTupleStart[j].p_brand,
+                    inputTupleStart[j].p_type,
+                    inputTupleStart[j].p_size,
+                    inputTupleStart[j].ps_suppkey); }
+    
+    for(pass=0; pass<NUM_PASS; pass++)
+    {
+        for(j=0; j<scratchMemoryThreeCount; j++){
     //for(j=0; j<100; j++){
-        //printf("Handling rid [%d] Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", j, inputTupleStart[j].p_brand,
-                    //inputTupleStart[j].p_type,
-                    //inputTupleStart[j].p_size,
-                    //inputTupleStart[j].ps_suppkey);    
+//        printf("Handling rid [%d] Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", j, inputTupleStart[j].p_brand,
+//                    inputTupleStart[j].p_type,
+//                    inputTupleStart[j].p_size,
+//                    inputTupleStart[j].ps_suppkey);    
         GB_searchNoUpdateAndInsert(j, pass);
     }
-    }
-    GB_printMemoryRec(scratchMemoryOne, &scratchMemoryOneCount);
     
+    GB_printMemoryRec(scratchMemoryFour, &scratchMemoryFourCount);
+    
+    printf("Hash Table Records in this partition (Phase 1) %d\n", scratchMemoryFourCount);
     
     GB_freePages();
     
-    UINT32 *semiAggTuplesPos = (UINT32*) scratchMemoryOne;
+    UINT32 *semiAggTuplesPos = (UINT32*) scratchMemoryFour;
     GB_changeRIDComparison(compareRidWithoutSuppkey);
     inputTupleStart = scratchMemoryThree;
-    for(pass=0; pass<NUM_PASS; pass++){
-    for(j=0; j<scratchMemoryOneCount; j++){
+    
+    for(j=0; j<scratchMemoryFourCount; j++){
         GB_searchUpdateAndInsert(semiAggTuplesPos[2*j], pass);
     }
-    }
+    
     GB_printMemoryRec(scratchMemoryTwo, &scratchMemoryTwoCount);
     
     aggregated_part_partsupp_join *aggregatedOuputTuples = (aggregated_part_partsupp_join*)scratchMemoryOne;
     aggregated_part_partsupp_join tempAggregatedOuputTuple;
     semiAggTuplesPos = (UINT32*)scratchMemoryTwo; 
     part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)inputTupleStart;
-    for(j=0; j<scratchMemoryTwoCount; j++){
+    for(j=lastCount; j<lastCount+scratchMemoryTwoCount; j++){
+         
         strncpy(tempAggregatedOuputTuple.p_brand, inputTuples[semiAggTuplesPos[2*j]].p_brand, sizeof(tempAggregatedOuputTuple.p_brand));
             strncpy(tempAggregatedOuputTuple.p_type, inputTuples[semiAggTuplesPos[2*j]].p_type, sizeof(tempAggregatedOuputTuple.p_type));
             tempAggregatedOuputTuple.p_size = inputTuples[semiAggTuplesPos[2*j]].p_size;
             tempAggregatedOuputTuple.distinct_ps_suppkey = semiAggTuplesPos[(2*j)+1];
             aggregatedOuputTuples[j] = tempAggregatedOuputTuple;
+            printf("COPY Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", aggregatedOuputTuples[j].p_brand,
+                    aggregatedOuputTuples[j].p_type,
+                    aggregatedOuputTuples[j].p_size,
+                    aggregatedOuputTuples[j].distinct_ps_suppkey);
     }
-    scratchMemoryOneCount = scratchMemoryTwoCount;
+    lastCount+=scratchMemoryTwoCount;
+}
+    scratchMemoryOneCount = lastCount;
+    printf("lastCount:%d\n", lastCount);
     GB_freeHashTable();
     return;
 }
@@ -493,10 +520,10 @@ void PG_sortFinal(){
     qsort(inputTuples, scratchMemoryOneCount, sizeof(*inputTuples), compareAggregatedPartPartsuppJoinElem);
     int i;
     for(i=0; i<scratchMemoryOneCount;i++){
-        //printf("Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", inputTuples[i].p_brand,
-          //          inputTuples[i].p_type,
-            //        inputTuples[i].p_size, 
-              //      inputTuples[i].distinct_ps_suppkey);
+//        printf("Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", inputTuples[i].p_brand,
+//                    inputTuples[i].p_type,
+//                    inputTuples[i].p_size, 
+//                    inputTuples[i].distinct_ps_suppkey);
         if(i%100 == 0){
             printf("Final Sorted :%d\n", i);
         }
@@ -506,6 +533,15 @@ void PG_sortFinal(){
 void sortFinal(){
     aggregated_part_partsupp_join *inputTuples = (aggregated_part_partsupp_join*)scratchMemoryOne;
     aggregated_part_partsupp_join *sortedOutputTuples = (aggregated_part_partsupp_join*)scratchMemoryOne;
+    printf("Tuples Before sortFinal");
+    int i;
+    int *positions;
+//    for (i = 0; i < scratchMemoryOneCount; i++) {
+//            printf("Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", sortedOutputTuples[i].p_brand,
+//                    sortedOutputTuples[i].p_type,
+//                    sortedOutputTuples[i].p_size,
+//                    sortedOutputTuples[i].distinct_ps_suppkey);
+//        }
     
     sortMultiPivotAndUndo(vmPCM, inputTuples, 
             scratchMemoryOneCount, 
@@ -516,8 +552,8 @@ void sortFinal(){
     int remainingSize = scratchMemoryOneCount;
     char *currOutPtr = scratchMemoryTwo;
     int currSize;
-    int *positions;
-    int i;
+    
+    
     
     
     while (remainingSize > 0) {
@@ -564,6 +600,9 @@ void init(){
     
     scratchMemoryThree = (char*)vmalloc(vmPCM, SCRATCH_MEMORY_SIZE);
     assert(scratchMemoryThree != NULL);
+    
+    scratchMemoryFour = (char*)vmalloc(vmPCM, SCRATCH_MEMORY_SIZE);
+    assert(scratchMemoryFour != NULL);
     
     PCMRange((unsigned long long)pcmMemory, (unsigned long long)(pcmMemory + PCM_MEMORY_SIZE));
     //printf("PCM Range Set to [Beg:%p End:%p]\n", pcmMemory, (pcmMemory + PCM_MEMORY_SIZE));
@@ -614,12 +653,18 @@ optimizedQueryExecution(){
     printf("scanAndFilterPartsupplierTable Over\n");
     joinPartAndPartsuppByPartkey(OPTIMIZED_QUERY);
     printf("joinPartAndPartsuppByPartkey Over\n");
-//    sortByBrandTypeSizeAndAggregate();
-//    printf("sortByBrandTypeSizeAndAggregate Over\n");
+    
+#if 0
+    PG_sortSimpleAndAggregate();
+    PG_sortFinal();
+#else
+    //sortByBrandTypeSizeAndAggregate();
+    //printf("sortByBrandTypeSizeAndAggregate Over\n");
     aggregateByGB();
     printf("aggregateByGB over\n");
     
     sortFinal();
+#endif
     flushDRAM();
     SimEnd();
     return (EXIT_SUCCESS);
@@ -628,13 +673,13 @@ int main(int argc, char** argv) {
    init();
    printf("sizeof (aggregated_part_partsupp_join) :%d\n", sizeof(aggregated_part_partsupp_join));
    printf("sizeof (part_partsupp_join_struct) :%d\n", sizeof(part_partsupp_join_struct));
+   printf("sizeof (pageHash) :%d\n", sizeof(GB_pageHash));
+   printf("sizeof (hashEntry) :%d\n", sizeof(GB_hashEntry));
 //   printf("sizeof () :%d\n", );
 //   printf("sizeof () :%d\n", );
 //   printf("sizeof () :%d\n", );
-//   printf("sizeof () :%d\n", );
-//   printf("sizeof () :%d\n", );
-   //postgresQueryExecution();
    optimizedQueryExecution();
+   //optimizedQueryExecution();
    
    return (EXIT_SUCCESS);  
 }
