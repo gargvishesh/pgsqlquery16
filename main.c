@@ -46,6 +46,10 @@ part_partsupp_join_struct *inputTupleStart;
 
 int filtered_s_suppkey[FILTERED_S_SUPPKEY_COUNT];
 
+char part_table_file[100];
+char supplier_table_file[100];
+char partsupplier_table_file[100];
+
 #ifdef VMALLOC
 Vmalloc_t *vmPCM; 
 #endif
@@ -85,7 +89,8 @@ typedef struct aggregated_part_partsupp_join{
 
 int scanAndFilterPartTable(){
     part pitem;
-    int fpIn = open(PART_TABLE_FILE, O_RDONLY);
+    int fpIn = open(part_table_file, O_RDONLY);
+    assert(fpIn != -1);
     projectedPartItem *pitemScratch = (projectedPartItem*)scratchMemoryOne;
     scratchMemoryOneCount = 0;
     while(read(fpIn, &pitem, sizeof(pitem)* 1) != 0){
@@ -132,7 +137,8 @@ int scanAndFilterSupplierTable(){
 int scanAndFilterPartsupplierTable(){
     partsupp psitem;
     
-    int fpPartsupp = open(PARTSUPPLIER_TABLE_FILE, O_RDONLY);
+    int fpPartsupp = open(partsupplier_table_file, O_RDONLY);
+    assert(fpPartsupp != -1);
     projectedPartsuppItem *psitemScratch = (projectedPartsuppItem*)scratchMemoryTwo;
     UINT32 index;
     BOOL discard;
@@ -844,8 +850,17 @@ int main(int argc, char** argv) {
    printf("sizeof (part_partsupp_join_struct) :%lu\n", sizeof(part_partsupp_join_struct));
    printf("sizeof (pageHash) :%lu\n", sizeof(GB_pageHash));
    printf("sizeof (hashEntry) :%lu\n", sizeof(GB_hashEntry));
+   
 #if 1
-   assert( argc == 2 );
+   assert( argc == 3 );
+   strcat(part_table_file, argv[2]);
+   strcat(supplier_table_file, argv[2]);
+   strcat(partsupplier_table_file, argv[2]);
+   
+   strcat(part_table_file, PART_TABLE_FILE);
+   strcat(supplier_table_file, SUPPLIER_TABLE_FILE);
+   strcat(partsupplier_table_file, PARTSUPPLIER_TABLE_FILE);
+   
    if(strcmp(argv[1],"0") == 0){
        postgresQueryExecution();
    }
