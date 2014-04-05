@@ -846,10 +846,14 @@ int optimizedQueryExecution(){
 }
 int main(int argc, char** argv) {
    init();
-   printf("sizeof (aggregated_part_partsupp_join) :%lu\n", sizeof(aggregated_part_partsupp_join));
-   printf("sizeof (part_partsupp_join_struct) :%lu\n", sizeof(part_partsupp_join_struct));
-   printf("sizeof (pageHash) :%lu\n", sizeof(GB_pageHash));
-   printf("sizeof (hashEntry) :%lu\n", sizeof(GB_hashEntry));
+   printf("sizeof (aggregated_part_partsupp_join) :%u\n", sizeof(aggregated_part_partsupp_join));
+   printf("sizeof (part_partsupp_join_struct) :%u\n", sizeof(part_partsupp_join_struct));
+   printf("sizeof (pageHash) :%u\n", sizeof(GB_pageHash));
+   printf("sizeof (hashEntry) :%u\n", sizeof(GB_hashEntry));
+   
+   fprintf(stderr, "\n\n\n*************************************\n");
+   fprintf(stderr, "Binary:%s Option[0]:%s Option[1]%s\n", argv[0], argv[1], argv[2]);
+   fprintf(stderr, "*************************************\n\n\n");
    
 #if 1
    assert( argc == 3 );
