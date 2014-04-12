@@ -833,6 +833,7 @@ int optimizedQueryExecution(){
     aggregateByGB();
     flushDRAM();
     printf("***GroupBy over***\n");
+    fprintf(stderr, "***GroupBy over***\n");
     sortFinal();
     return (EXIT_SUCCESS);
 }
@@ -867,7 +868,8 @@ int main(int argc, char** argv) {
    scanAndFilterPartsupplierTable();
    printf("scanAndFilterPartsupplierTable Over\n");
    flushDRAM();
-    
+   printf("***Scan Over***\n"); 
+   fprintf(stderr, "***Scan Over***\n"); 
    
    
    if (strcmp(argv[1], "0") == 0) {
