@@ -135,12 +135,20 @@ int scanAndFilterSupplierTable(float selectivityConstant){
     printf("scanAndFilterSupplierTable totalCount: %d Count: %d\n", totalCount, scratchMemoryThreeCount);
     
 }
-
 int scanAndFilterPartsupplierTable(){
-    partsupp psitem;
-    
     int fpPartsupp = open(partsupplier_table_file, O_RDONLY);
     assert(fpPartsupp != -1);
+    partsupp psitem;
+    partsupp *psitemScratch = (partsupp*)scratchMemoryFour;
+    scratchMemoryFourCount = 0;
+    while(read(fpPartsupp, &psitem, sizeof(psitem)*1) != 0){
+        psitemScratch[scratchMemoryFourCount++] = psitem;
+    }
+    close(fpPartsupp);
+}
+int antiJoinPartsupplierSupplierTable(){
+    partsupp psitem;
+    
     int *filtered_s_suppkey = (int*)scratchMemoryThree;
     projectedPartsuppItem *psitemScratch = (projectedPartsuppItem*)scratchMemoryTwo;
     UINT32 index;
@@ -152,9 +160,12 @@ int scanAndFilterPartsupplierTable(){
                 sizeof *(filtered_s_suppkey));
         
     }
-    while(read(fpPartsupp, &psitem, sizeof(psitem)*1) != 0){
-    void *lastPage = NULL, *lastIndex = NULL;
-    char *tuplePtr;
+    partsupp *psitemScratchInput = (partsupp*)scratchMemoryFour;
+    for(index = 0; index < scratchMemoryFourCount; index++){
+      
+        psitem = psitemScratchInput[index];
+        void *lastPage = NULL, *lastIndex = NULL;
+        char *tuplePtr;
         if (searchHashEntry((char*) &(psitem.ps_suppkey),
                     sizeof (psitem.ps_suppkey),
                     (void**) &tuplePtr, &lastPage, &lastIndex) == 0) {
@@ -165,7 +176,6 @@ int scanAndFilterPartsupplierTable(){
     }
     printf("scanAndFilterPartsupplierTable Count: %d\n", scratchMemoryTwoCount);
     freeHashTable();
-    close(fpPartsupp);
 }
 
 int joinPartAndPartsuppByPartkey(UINT8 queryType){
@@ -800,7 +810,26 @@ void flushDRAM(){
  * 
  */
 
- int postgresQueryExecution(){
+ int postgresQueryExecution_red(){
+    printf("\n\n\n\n\n");
+    printf("***********************\n");
+    printf("Posgres Query Execution\n");
+    printf("*************************\n");
+    printf("\n\n\n\n\n");
+    antiJoinPartsupplierSupplierTable();
+    joinPartAndPartsuppByPartkey(POSTGRES_QUERY);
+    flushDRAM();
+    printf("joinPartAndPartsuppByPartkey Over\n");
+    fprintf(stderr, "***joinPartAndPartsuppByPartkey Over***\n");
+    PG_sortSimpleAndAggregate();
+    flushDRAM();
+    printf("GroupBy over\n");
+    fprintf(stderr, "***GroupBy over***\n");
+    PG_sortFinal();
+    return (EXIT_SUCCESS);
+}
+ 
+  int postgresQueryExecution_blue(){
     printf("\n\n\n\n\n");
     printf("***********************\n");
     printf("Posgres Query Execution\n");
@@ -819,7 +848,27 @@ void flushDRAM(){
     return (EXIT_SUCCESS);
 }
 
-int optimizedQueryExecution(){
+int optimizedQueryExecution_red(){
+    printf("\n\n\n\n\n");
+    printf("*************************\n");
+    printf("Optimized Query Execution\n");
+    printf("*************************\n");
+    printf("\n\n\n\n\n");
+    
+    antiJoinPartsupplierSupplierTable();
+    joinPartAndPartsuppByPartkey(OPTIMIZED_QUERY);
+    flushDRAM();
+    printf("joinPartAndPartsuppByPartkey Over\n");
+    fprintf(stderr, "***joinPartAndPartsuppByPartkey Over***\n");
+    aggregateByGB();
+    flushDRAM();
+    printf("***GroupBy over***\n");
+    fprintf(stderr, "***GroupBy over***\n");
+    sortFinal();
+    return (EXIT_SUCCESS);
+}
+
+int optimizedQueryExecution_blue(){
     printf("\n\n\n\n\n");
     printf("*************************\n");
     printf("Optimized Query Execution\n");
@@ -873,9 +922,9 @@ int main(int argc, char** argv) {
    
    
    if (strcmp(argv[1], "0") == 0) {
-            postgresQueryExecution();
+            postgresQueryExecution_red();
    } else{
-       optimizedQueryExecution();
+       optimizedQueryExecution_red();
    }
 #else
    postgresQueryExecution();
