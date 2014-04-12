@@ -22,11 +22,13 @@
 #include "constants.h"
 #include "GB_hashTable.h"
 #include "GeneralHashFunctions.h"
+#include "btree.h"
 //#include "clock.h"
 
-#define FILTERED_S_SUPPKEY_COUNT 4
 #define POSTGRES_QUERY 0
 #define OPTIMIZED_QUERY 1
+
+#define max(i,j) ((i>j)?i:j)
 
 UINT32 scratchMemoryOneCount;
 UINT32 scratchMemoryTwoCount;
@@ -44,8 +46,6 @@ char *scratchMemoryFour;
 char *pcmMemory;
 part_partsupp_join_struct *inputTupleStart;
 
-int filtered_s_suppkey[FILTERED_S_SUPPKEY_COUNT];
-
 char part_table_file[100];
 char supplier_table_file[100];
 char partsupplier_table_file[100];
@@ -53,15 +53,6 @@ char partsupplier_table_file[100];
 #ifdef VMALLOC
 Vmalloc_t *vmPCM; 
 #endif
-UINT32 simBeginCount;
-void SimBegin(){
-    printf("\n\n***Starting Sim [Count%d]***\n\n", ++simBeginCount);
-    //ptlcall_switch_to_sim();
-}
-void SimEnd(){
-    printf("\n\n***Ending Sim [Count: %d]***\n\n", simBeginCount);
-    //ptlcall_switch_to_native();
-}
 typedef struct projectedPartItem
 {
 	UINT32 p_partkey;
@@ -87,14 +78,18 @@ typedef struct aggregated_part_partsupp_join{
         UINT32 distinct_ps_suppkey;
 }aggregated_part_partsupp_join;
 
-int scanAndFilterPartTable(){
+int scanAndFilterPartTable(float selectivityConstant) {
     part pitem;
+    fprintf(stderr, "Selectivity Constant [Part] : %f\n", selectivityConstant);
+    printf("Selectivity Constant [Part] : %f\n", selectivityConstant);
     int fpIn = open(part_table_file, O_RDONLY);
+    int totalCount=0;
     assert(fpIn != -1);
-    projectedPartItem *pitemScratch = (projectedPartItem*)scratchMemoryOne;
+    projectedPartItem *pitemScratch = (projectedPartItem*) scratchMemoryOne;
     scratchMemoryOneCount = 0;
-    while(read(fpIn, &pitem, sizeof(pitem)* 1) != 0){
-        if( strncmp(pitem.p_brand, "Brand#35", 8) != 0 &&
+    while (read(fpIn, &pitem, sizeof (pitem)* 1) != 0) {
+#if 0
+        if (strncmp(pitem.p_brand, "Brand#35", 8) != 0 &&
                 strstr(pitem.p_type, "ECONOMY BURNISHED") == NULL &&
                 (pitem.p_size == 14 ||
                 pitem.p_size == 7 ||
@@ -103,34 +98,41 @@ int scanAndFilterPartTable(){
                 pitem.p_size == 35 ||
                 pitem.p_size == 33 ||
                 pitem.p_size == 2 ||
-                pitem.p_size == 20)){
-            
-                strncpy(pitemScratch[scratchMemoryOneCount].p_brand, pitem.p_brand, sizeof(pitem.p_brand));
+                pitem.p_size == 20)) {
+#endif
+            totalCount++;
+            if (pitem.p_retailprice <= selectivityConstant) {
+                strncpy(pitemScratch[scratchMemoryOneCount].p_brand, pitem.p_brand, sizeof (pitem.p_brand));
                 pitemScratch[scratchMemoryOneCount].p_partkey = pitem.p_partkey;
                 pitemScratch[scratchMemoryOneCount].p_size = pitem.p_size;
-                strncpy(pitemScratch[scratchMemoryOneCount].p_type, pitem.p_type, sizeof(pitem.p_type));
+                strncpy(pitemScratch[scratchMemoryOneCount].p_type, pitem.p_type, sizeof (pitem.p_type));
                 scratchMemoryOneCount++;
+            }
         }
+        printf("scanAndFilterPartTable totalCount: %d, Count: %d\n", totalCount, scratchMemoryOneCount);
+        close(fpIn);
     }
-    printf("scanAndFilterPartTable Count: %d\n", scratchMemoryOneCount);
-    close(fpIn);
-}
-int scanAndFilterSupplierTable(){
+int scanAndFilterSupplierTable(float selectivityConstant){
     /*We have used grep to find the s_suppkey of lines matching 
      * '%Customer%Complaints' and put it into an array. This is because 
      * this saves a lot of hassles in computing such expression in C. */ 
     
-    //supplier *sitem = (supplier*)vmalloc(vmPCM, sizeof(supplier));
-    //int fpSupp = open(SUPPLIER_TABLE_FILE, O_RDONLY);
-    
+    supplier sitem;
+    fprintf(stderr, "Selectivity Constant [Supplier] : %f\n", selectivityConstant);
+    printf("Selectivity Constant [Supplier] : %f\n", selectivityConstant);
+    int fpSupp = open(supplier_table_file, O_RDONLY);
+    int *filtered_s_suppkey = (int*)scratchMemoryThree;
+    scratchMemoryThreeCount = 0;
+    int totalCount=0;
     /*Dummy reads to just increase PCM write count */ 
-    //while(read(fpSupp, sitem, sizeof(*sitem)* 1) != 0);
-    //close(fpSupp);
-    filtered_s_suppkey[0] = 358;
-    filtered_s_suppkey[1] = 2820;
-    filtered_s_suppkey[2] = 3804;
-    filtered_s_suppkey[3] = 9504;
-    printf("scanAndFilterSupplierTable Count: %d\n", FILTERED_S_SUPPKEY_COUNT);
+    while(read(fpSupp, &sitem, sizeof(sitem)) != 0){
+        totalCount++;
+        if(sitem.s_acctbal <= selectivityConstant ){
+            filtered_s_suppkey[scratchMemoryThreeCount++] = sitem.s_suppkey;
+        }
+    }
+    close(fpSupp);
+    printf("scanAndFilterSupplierTable totalCount: %d Count: %d\n", totalCount, scratchMemoryThreeCount);
     
 }
 
@@ -139,41 +141,46 @@ int scanAndFilterPartsupplierTable(){
     
     int fpPartsupp = open(partsupplier_table_file, O_RDONLY);
     assert(fpPartsupp != -1);
+    int *filtered_s_suppkey = (int*)scratchMemoryThree;
     projectedPartsuppItem *psitemScratch = (projectedPartsuppItem*)scratchMemoryTwo;
     UINT32 index;
-    BOOL discard;
     scratchMemoryTwoCount = 0;
+    initHT(scratchMemoryThreeCount/ENTRIES_PER_BUCKET, OPT_ENTRIES_PER_PAGE);
+    for (index = 0; index < scratchMemoryThreeCount; index++) {
+        insertHashEntry((void*) &(filtered_s_suppkey[index]),
+                (char*) &(filtered_s_suppkey[index]),
+                sizeof *(filtered_s_suppkey));
+        
+    }
     while(read(fpPartsupp, &psitem, sizeof(psitem)*1) != 0){
-        discard = 0;
-        for(index=0; index<FILTERED_S_SUPPKEY_COUNT; index++){
-            if(psitem.ps_suppkey == filtered_s_suppkey[index]){
-                discard = 1;
-                break;
-            } 
-        }
-        if (!discard){
+    void *lastPage = NULL, *lastIndex = NULL;
+    char *tuplePtr;
+        if (searchHashEntry((char*) &(psitem.ps_suppkey),
+                    sizeof (psitem.ps_suppkey),
+                    (void**) &tuplePtr, &lastPage, &lastIndex) == 0) {
             psitemScratch[scratchMemoryTwoCount].ps_suppkey = psitem.ps_suppkey;
             psitemScratch[scratchMemoryTwoCount].ps_partkey = psitem.ps_partkey;
             scratchMemoryTwoCount++;
         }
     }
     printf("scanAndFilterPartsupplierTable Count: %d\n", scratchMemoryTwoCount);
+    freeHashTable();
     close(fpPartsupp);
 }
 
 int joinPartAndPartsuppByPartkey(UINT8 queryType){
     if(queryType == POSTGRES_QUERY){
 #ifdef VMALLOC
-        initHT(vmPCM, BUCKET_COUNT, PSQL_ENTRIES_PER_PAGE);
+        initHT(vmPCM, scratchMemoryOneCount/ENTRIES_PER_BUCKET, PSQL_ENTRIES_PER_PAGE);
 #else
-          initHT(BUCKET_COUNT, PSQL_ENTRIES_PER_PAGE);
+          initHT(scratchMemoryOneCount/ENTRIES_PER_BUCKET, PSQL_ENTRIES_PER_PAGE);
 #endif
     }
     else{
 #ifdef VMALLOC
         initHT(vmPCM, BUCKET_COUNT, OPT_ENTRIES_PER_PAGE);
 #else
-          initHT(BUCKET_COUNT, OPT_ENTRIES_PER_PAGE);
+          initHT(scratchMemoryOneCount/ENTRIES_PER_BUCKET, OPT_ENTRIES_PER_PAGE);
 #endif
     }
     
@@ -522,7 +529,6 @@ void PG_sortSimpleAndAggregate(){
     aggregated_part_partsupp_join *aggregatedOuputTuples = (aggregated_part_partsupp_join*)scratchMemoryOne;
     UINT32 aggregateCount = 0;
     UINT32 distinctSuppkeyCount = 0;
-    SimBegin();
 #if 1    
     qsort(inputTuples, scratchMemoryThreeCount, sizeof(*inputTuples), comparePartPartSuppJoinElem);
 #else
@@ -542,8 +548,6 @@ void PG_sortSimpleAndAggregate(){
             100, 6000);
 #endif
 #endif
-    SimEnd();
-    SimBegin();
     int i;
     for(i=0; i<scratchMemoryThreeCount;i++){
         strncpy(tempAggregatedOuputTuple.p_brand, inputTuples[i].p_brand, sizeof (inputTuples[i].p_brand));
@@ -570,7 +574,6 @@ void PG_sortSimpleAndAggregate(){
         aggregateCount++;
     }
     scratchMemoryOneCount = aggregateCount;
-    SimEnd();
     printf("PG_sortSimpleAndAggregate Count: %d\n", scratchMemoryOneCount);
 }
 void aggregateByGB(){
@@ -595,7 +598,7 @@ void aggregateByGB(){
             sizeof(*inputTuples), 
             comparePartPartSuppJoinElem,
             scratchMemoryTwo,
-            10, 6000, hashValue_from_ptr);
+            max(1, 2*(scratchMemoryThreeCount/MAX_THRESHOLD)), MAX_THRESHOLD/2, hashValue_from_ptr);
 #endif
 #endif
     int i;
@@ -725,7 +728,7 @@ void sortFinal(){
             sizeof(*inputTuples), 
             compareAggregatedPartPartsuppJoinElem,
             scratchMemoryTwo, 
-            40, 8000);
+            max(1,2*(scratchMemoryOneCount/MAX_THRESHOLD)), MAX_THRESHOLD/2);
 #endif
     
     int remainingSize = scratchMemoryOneCount;
@@ -803,20 +806,16 @@ void flushDRAM(){
     printf("Posgres Query Execution\n");
     printf("*************************\n");
     printf("\n\n\n\n\n");
-    scanAndFilterPartTable();
-    printf("scanAndFilterPartTable Over\n");
-    scanAndFilterSupplierTable();
-    printf("scanAndFilterSupplierTable Over\n");
-    scanAndFilterPartsupplierTable();
-    printf("scanAndFilterPartsupplierTable Over\n");
-    flushDRAM();
+    
     joinPartAndPartsuppByPartkey(POSTGRES_QUERY);
-    printf("joinPartAndPartsuppByPartkey Over\n");
-    PG_sortSimpleAndAggregate();
-    PG_sortFinal();
-    SimBegin();
     flushDRAM();
-    SimEnd();
+    printf("joinPartAndPartsuppByPartkey Over\n");
+    fprintf(stderr, "***joinPartAndPartsuppByPartkey Over***\n");
+    PG_sortSimpleAndAggregate();
+    flushDRAM();
+    printf("GroupBy over\n");
+    fprintf(stderr, "***GroupBy over***\n");
+    PG_sortFinal();
     return (EXIT_SUCCESS);
 }
 
@@ -827,24 +826,21 @@ int optimizedQueryExecution(){
     printf("*************************\n");
     printf("\n\n\n\n\n");
     
-    scanAndFilterPartTable();
-    printf("scanAndFilterPartTable Over\n");
-    scanAndFilterSupplierTable();
-    printf("scanAndFilterSupplierTable Over\n");
-    scanAndFilterPartsupplierTable();
-    printf("scanAndFilterPartsupplierTable Over\n");
-    flushDRAM();
     joinPartAndPartsuppByPartkey(OPTIMIZED_QUERY);
-    printf("joinPartAndPartsuppByPartkey Over\n");
-    aggregateByGB();
-    printf("aggregateByGB over\n");
-    sortFinal();
-    SimBegin();
     flushDRAM();
-    SimEnd();
+    printf("joinPartAndPartsuppByPartkey Over\n");
+    fprintf(stderr, "***joinPartAndPartsuppByPartkey Over***\n");
+    aggregateByGB();
+    flushDRAM();
+    printf("***GroupBy over***\n");
+    sortFinal();
     return (EXIT_SUCCESS);
 }
 int main(int argc, char** argv) {
+   if( argc != 5 ){
+       printf("\n\nUsage: ./pgsqlquery16 <0/1> <tables_dir> <part_sel> <supp_sel>\n\n");
+       return 1;
+   }
    init();
    printf("sizeof (aggregated_part_partsupp_join) :%u\n", sizeof(aggregated_part_partsupp_join));
    printf("sizeof (part_partsupp_join_struct) :%u\n", sizeof(part_partsupp_join_struct));
@@ -852,11 +848,10 @@ int main(int argc, char** argv) {
    printf("sizeof (hashEntry) :%u\n", sizeof(GB_hashEntry));
    
    fprintf(stderr, "\n\n\n*************************************\n");
-   fprintf(stderr, "Binary:%s Option[0]:%s Option[1]%s\n", argv[0], argv[1], argv[2]);
+   fprintf(stderr, "Binary:%s Option [1]:%s [2]:%s [3]:%s [4]:%s\n", argv[0], argv[1], argv[2], argv[3], argv[4]);
    fprintf(stderr, "*************************************\n\n\n");
    
 #if 1
-   assert( argc == 3 );
    strcat(part_table_file, argv[2]);
    strcat(supplier_table_file, argv[2]);
    strcat(partsupplier_table_file, argv[2]);
@@ -865,15 +860,25 @@ int main(int argc, char** argv) {
    strcat(supplier_table_file, SUPPLIER_TABLE_FILE);
    strcat(partsupplier_table_file, PARTSUPPLIER_TABLE_FILE);
    
-   if(strcmp(argv[1],"0") == 0){
-       postgresQueryExecution();
-   }
-   else{
+   scanAndFilterPartTable(atof(argv[3]));
+   printf("scanAndFilterPartTable Over\n");
+   scanAndFilterSupplierTable(atof(argv[4]));
+   printf("scanAndFilterSupplierTable Over\n");
+   scanAndFilterPartsupplierTable();
+   printf("scanAndFilterPartsupplierTable Over\n");
+   flushDRAM();
+    
+   
+   
+   if (strcmp(argv[1], "0") == 0) {
+            postgresQueryExecution();
+   } else{
        optimizedQueryExecution();
    }
 #else
    postgresQueryExecution();
 #endif
+   flushDRAM();
    return (EXIT_SUCCESS);  
 }
 
