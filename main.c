@@ -34,6 +34,7 @@ UINT32 scratchMemoryOneCount;
 UINT32 scratchMemoryTwoCount;
 UINT32 scratchMemoryThreeCount;
 UINT32 scratchMemoryFourCount;
+UINT32 scratchMemoryFiveCount;
 
 
 UINT32 bucketCountForAggregation;
@@ -42,6 +43,7 @@ char *scratchMemoryOne;
 char *scratchMemoryTwo;
 char *scratchMemoryThree;
 char *scratchMemoryFour;
+char *scratchMemoryFive;
 
 char *pcmMemory;
 part_partsupp_join_struct *inputTupleStart;
@@ -53,30 +55,6 @@ char partsupplier_table_file[100];
 #ifdef VMALLOC
 Vmalloc_t *vmPCM; 
 #endif
-typedef struct projectedPartItem
-{
-	UINT32 p_partkey;
-	char p_brand[11];
-	char p_type[26];
-	UINT32 p_size;
-	
-}projectedPartItem;
-
-typedef struct projectedPartsuppItem
-{
-	UINT32 ps_partkey;
-	UINT32 ps_suppkey;
-	UINT32 ps_availqty;
-	float ps_supplycost;
-	char ps_comment[200];
-}projectedPartsuppItem;
-
-typedef struct aggregated_part_partsupp_join{
-        char p_brand[11];
-        char p_type[26];
-        UINT32 p_size;
-        UINT32 distinct_ps_suppkey;
-}aggregated_part_partsupp_join;
 
 int scanAndFilterPartTable(float selectivityConstant) {
     part pitem;
@@ -146,101 +124,9 @@ int scanAndFilterPartsupplierTable(){
     }
     close(fpPartsupp);
 }
-int antiJoinPartsupplierSupplierTable(){
-    partsupp psitem;
-    
-    int *filtered_s_suppkey = (int*)scratchMemoryThree;
-    projectedPartsuppItem *psitemScratch = (projectedPartsuppItem*)scratchMemoryTwo;
-    UINT32 index;
-    scratchMemoryTwoCount = 0;
-    initHT(scratchMemoryThreeCount/ENTRIES_PER_BUCKET, OPT_ENTRIES_PER_PAGE);
-    for (index = 0; index < scratchMemoryThreeCount; index++) {
-        insertHashEntry((void*) &(filtered_s_suppkey[index]),
-                (char*) &(filtered_s_suppkey[index]),
-                sizeof *(filtered_s_suppkey));
-        
-    }
-    partsupp *psitemScratchInput = (partsupp*)scratchMemoryFour;
-    for(index = 0; index < scratchMemoryFourCount; index++){
-      
-        psitem = psitemScratchInput[index];
-        void *lastPage = NULL, *lastIndex = NULL;
-        char *tuplePtr;
-        if (searchHashEntry((char*) &(psitem.ps_suppkey),
-                    sizeof (psitem.ps_suppkey),
-                    (void**) &tuplePtr, &lastPage, &lastIndex) == 0) {
-            psitemScratch[scratchMemoryTwoCount].ps_suppkey = psitem.ps_suppkey;
-            psitemScratch[scratchMemoryTwoCount].ps_partkey = psitem.ps_partkey;
-            scratchMemoryTwoCount++;
-        }
-    }
-    printf("scanAndFilterPartsupplierTable Count: %d\n", scratchMemoryTwoCount);
-    freeHashTable();
-}
 
-int joinPartAndPartsuppByPartkey(UINT8 queryType){
-    if(queryType == POSTGRES_QUERY){
-#ifdef VMALLOC
-        initHT(vmPCM, scratchMemoryOneCount/ENTRIES_PER_BUCKET, PSQL_ENTRIES_PER_PAGE);
-#else
-          initHT(scratchMemoryOneCount/ENTRIES_PER_BUCKET, PSQL_ENTRIES_PER_PAGE);
-#endif
-    }
-    else{
-#ifdef VMALLOC
-        initHT(vmPCM, BUCKET_COUNT, OPT_ENTRIES_PER_PAGE);
-#else
-          initHT(scratchMemoryOneCount/ENTRIES_PER_BUCKET, OPT_ENTRIES_PER_PAGE);
-#endif
-    }
-    
-    int index;
-    void *lastPage = NULL, *lastIndex = NULL;
-    projectedPartItem *pitem = (projectedPartItem*) scratchMemoryOne;
-    printf("Join:[LeftRecordCount:%d, RightRecordCount:%d]\n", 
-            scratchMemoryOneCount,
-            scratchMemoryTwoCount);
-    for (index = 0; index < scratchMemoryOneCount; index++) {
-        insertHashEntry((void*) &(pitem[index]),
-                (char*) &(pitem[index].p_partkey),
-                sizeof (pitem[index].p_partkey));
-        
-    }
-    projectedPartItem *tuplePtr;
-    projectedPartsuppItem *psitem = (projectedPartsuppItem*) scratchMemoryTwo;
-    part_partsupp_join_struct *ppjsitem = (part_partsupp_join_struct*)scratchMemoryThree;
-    scratchMemoryThreeCount = 0;
-    printf("Done Inserting. Now Joins. Outer Records Count: %d\n", scratchMemoryTwoCount);
-    
-    for (index = 0; index < scratchMemoryTwoCount; index++) {
-        
-        lastPage = NULL, lastIndex = NULL;
-        if(index%10000 == 0){
-            printf("Completed : %d\n", index);
-        }
-        while (searchHashEntry((char*) &(psitem[index].ps_partkey),
-                sizeof (psitem[index].ps_partkey),
-                (void**) &tuplePtr, &lastPage, &lastIndex) == 1) {
-            
-            if (tuplePtr->p_partkey == psitem[index].ps_partkey) {
-                
-                strncpy(ppjsitem[scratchMemoryThreeCount].p_brand ,
-                        tuplePtr->p_brand, 
-                        sizeof(ppjsitem[scratchMemoryThreeCount].p_brand));
-                ppjsitem[scratchMemoryThreeCount].p_size = tuplePtr->p_size;
-                strncpy(ppjsitem[scratchMemoryThreeCount].p_type, 
-                        tuplePtr->p_type, 
-                        sizeof(ppjsitem[scratchMemoryThreeCount].p_type));
-                ppjsitem[scratchMemoryThreeCount].ps_suppkey = psitem[index].ps_suppkey;
-                assert(ppjsitem[scratchMemoryThreeCount].p_size != 0);
-                scratchMemoryThreeCount++;
-            }
-        }
 
-    }
-    printf("joinPartAndPartsuppByPartkey Count: %d\n", scratchMemoryThreeCount);
-    freeHashTable();
-}
+
 int comparePartPartSuppJoinElem(const void *p1, const void *p2){
     assert(p1 != NULL);
     assert(p2 != NULL);
@@ -534,24 +420,24 @@ void sortByBrandTypeSizeAndAggregate(){
 }
 #endif
 void PG_sortSimpleAndAggregate(){
-    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryThree;
+    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryFive;
     aggregated_part_partsupp_join tempAggregatedOuputTuple ;
     aggregated_part_partsupp_join *aggregatedOuputTuples = (aggregated_part_partsupp_join*)scratchMemoryOne;
     UINT32 aggregateCount = 0;
     UINT32 distinctSuppkeyCount = 0;
 #if 1    
-    qsort(inputTuples, scratchMemoryThreeCount, sizeof(*inputTuples), comparePartPartSuppJoinElem);
+    qsort(inputTuples, scratchMemoryFiveCount, sizeof(*inputTuples), comparePartPartSuppJoinElem);
 #else
 #ifdef VMALLOC
     sortMultiPivotAndUndo(vmPCM, inputTuples, 
-            scratchMemoryThreeCount, 
+            scratchMemoryFiveCount, 
             sizeof(*inputTuples), 
             comparePartPartSuppJoinElem,
             scratchMemoryTwo,
             100, 6000);
 #else
     sortMultiPivotAndUndo((char*)inputTuples, 
-            scratchMemoryThreeCount, 
+            scratchMemoryFiveCount, 
             sizeof(*inputTuples), 
             comparePartPartSuppJoinElem,
             scratchMemoryTwo,
@@ -559,13 +445,13 @@ void PG_sortSimpleAndAggregate(){
 #endif
 #endif
     int i;
-    for(i=0; i<scratchMemoryThreeCount;i++){
+    for(i=0; i<scratchMemoryFiveCount;i++){
         strncpy(tempAggregatedOuputTuple.p_brand, inputTuples[i].p_brand, sizeof (inputTuples[i].p_brand));
         strncpy(tempAggregatedOuputTuple.p_type, inputTuples[i].p_type, sizeof (inputTuples[i].p_type));
         tempAggregatedOuputTuple.p_size = inputTuples[i].p_size;
         i++;
         distinctSuppkeyCount = 1;
-        while ((i < scratchMemoryThreeCount) &&
+        while ((i < scratchMemoryFiveCount) &&
                 ((strncmp(inputTuples[i].p_brand, inputTuples[i - 1].p_brand, sizeof (inputTuples[i].p_brand)) == 0) &&
                 (strncmp(inputTuples[i].p_type, inputTuples[i - 1].p_type, sizeof (inputTuples[i].p_type)) == 0) &&
                 (inputTuples[i].p_size == inputTuples[i - 1].p_size))) {
@@ -587,39 +473,39 @@ void PG_sortSimpleAndAggregate(){
     printf("PG_sortSimpleAndAggregate Count: %d\n", scratchMemoryOneCount);
 }
 void aggregateByGB(){
-    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryThree;
+    part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)scratchMemoryFive;
     aggregated_part_partsupp_join tempAggregatedOuputTuple ;
     aggregated_part_partsupp_join *aggregatedOuputTuples = (aggregated_part_partsupp_join*)scratchMemoryOne;
     UINT32 aggregateCount = 0;
     UINT32 distinctSuppkeyCount = 0;
 #if 0    
-    qsort(inputTuples, scratchMemoryThreeCount, sizeof(*inputTuples), comparePartPartSuppJoinElem);
+    qsort(inputTuples, scratchMemoryFiveCount, sizeof(*inputTuples), comparePartPartSuppJoinElem);
 #else
 #ifdef VMALLOC
     sortMultiPivotAndUndo(vmPCM, inputTuples, 
-            scratchMemoryThreeCount, 
+            scratchMemoryFiveCount, 
             sizeof(*inputTuples), 
             comparePartPartSuppJoinElem,
             scratchMemoryTwo,
             100, 6000);
 #else
     sortMultiHashAndUndo((char*)inputTuples, 
-            scratchMemoryThreeCount, 
+            scratchMemoryFiveCount, 
             sizeof(*inputTuples), 
             comparePartPartSuppJoinElem,
             scratchMemoryTwo,
-            max(1, 2*(scratchMemoryThreeCount/MAX_THRESHOLD)), MAX_THRESHOLD/2, hashValue_from_ptr);
+            max(1, 2*(scratchMemoryFiveCount/MAX_THRESHOLD)), MAX_THRESHOLD/2, hashValue_from_ptr);
 #endif
 #endif
     int i;
 #if 0
-    for(i=0; i<scratchMemoryThreeCount;i++){
+    for(i=0; i<scratchMemoryFiveCount;i++){
         strncpy(tempAggregatedOuputTuple.p_brand, inputTuples[i].p_brand, sizeof (inputTuples[i].p_brand));
         strncpy(tempAggregatedOuputTuple.p_type, inputTuples[i].p_type, sizeof (inputTuples[i].p_type));
         tempAggregatedOuputTuple.p_size = inputTuples[i].p_size;
         i++;
         distinctSuppkeyCount = 1;
-        while ((i < scratchMemoryThreeCount) &&
+        while ((i < scratchMemoryFiveCount) &&
                 ((strncmp(inputTuples[i].p_brand, inputTuples[i - 1].p_brand, sizeof (inputTuples[i].p_brand)) == 0) &&
                 (strncmp(inputTuples[i].p_type, inputTuples[i - 1].p_type, sizeof (inputTuples[i].p_type)) == 0) &&
                 (inputTuples[i].p_size == inputTuples[i - 1].p_size))) {
@@ -639,14 +525,14 @@ void aggregateByGB(){
     }
 #endif
     int *positions = (int *)(scratchMemoryTwo);
-    for (i = 0; i < scratchMemoryThreeCount; i++) {
-            assert(positions[i] < scratchMemoryThreeCount);
+    for (i = 0; i < scratchMemoryFiveCount; i++) {
+            assert(positions[i] < scratchMemoryFiveCount);
             strncpy(tempAggregatedOuputTuple.p_brand, inputTuples[positions[i]].p_brand, sizeof(inputTuples[positions[i]].p_brand));
             strncpy(tempAggregatedOuputTuple.p_type, inputTuples[positions[i]].p_type, sizeof(inputTuples[positions[i]].p_type));
             tempAggregatedOuputTuple.p_size = inputTuples[positions[i]].p_size;
             i++;
             distinctSuppkeyCount=1;
-            while((i<scratchMemoryThreeCount) && 
+            while((i<scratchMemoryFiveCount) && 
                    ((strncmp(inputTuples[positions[i]].p_brand, inputTuples[positions[i-1]].p_brand, sizeof(inputTuples[positions[i]].p_brand)) == 0) &&
                     (strncmp(inputTuples[positions[i]].p_type, inputTuples[positions[i-1]].p_type, sizeof(inputTuples[positions[i]].p_type)) == 0) &&
                     (inputTuples[positions[i]].p_size == inputTuples[positions[i-1]].p_size))){
@@ -738,7 +624,7 @@ void sortFinal(){
             sizeof(*inputTuples), 
             compareAggregatedPartPartsuppJoinElem,
             scratchMemoryTwo, 
-            max(1,2*(scratchMemoryOneCount/MAX_THRESHOLD)), MAX_THRESHOLD/2);
+            max(1,2*(scratchMemoryOneCount/MAX_THRESHOLD)), MAX_THRESHOLD/2); //Twicing the number of partitions and halving the threshold to enable safe merge
 #endif
     
     int remainingSize = scratchMemoryOneCount;
@@ -790,6 +676,9 @@ void init(){
     
     scratchMemoryFour = (char*)malloc(SCRATCH_MEMORY_SIZE);
     assert(scratchMemoryFour != NULL);
+    
+    scratchMemoryFive = (char*)malloc(SCRATCH_MEMORY_SIZE);
+    assert(scratchMemoryFive != NULL);
 #endif    
     //PCMRange((unsigned long long)pcmMemory, (unsigned long long)(pcmMemory + PCM_MEMORY_SIZE));
     //printf("PCM Range Set to [Beg:%p End:%p]\n", pcmMemory, (pcmMemory + PCM_MEMORY_SIZE));
@@ -816,8 +705,11 @@ void flushDRAM(){
     printf("Posgres Query Execution\n");
     printf("*************************\n");
     printf("\n\n\n\n\n");
-    antiJoinPartsupplierSupplierTable();
-    joinPartAndPartsuppByPartkey(POSTGRES_QUERY);
+    antiJoinPartsupplierSupplierTable_red();
+    flushDRAM();
+    printf("Anti Join Over\n");
+    fprintf(stderr, "***Anti Join Over***\n");
+    joinPartAndPartsuppByPartkey_red(POSTGRES_QUERY);
     flushDRAM();
     printf("joinPartAndPartsuppByPartkey Over\n");
     fprintf(stderr, "***joinPartAndPartsuppByPartkey Over***\n");
@@ -836,10 +728,14 @@ void flushDRAM(){
     printf("*************************\n");
     printf("\n\n\n\n\n");
     
-    joinPartAndPartsuppByPartkey(POSTGRES_QUERY);
+    joinPartAndPartsuppByPartkey_blue(POSTGRES_QUERY);
     flushDRAM();
     printf("joinPartAndPartsuppByPartkey Over\n");
     fprintf(stderr, "***joinPartAndPartsuppByPartkey Over***\n");
+    antiJoinPartsupplierSupplierTable_blue();
+    flushDRAM();
+    printf("Anti Join Over\n");
+    fprintf(stderr, "***Anti Join Over***\n");
     PG_sortSimpleAndAggregate();
     flushDRAM();
     printf("GroupBy over\n");
@@ -855,8 +751,11 @@ int optimizedQueryExecution_red(){
     printf("*************************\n");
     printf("\n\n\n\n\n");
     
-    antiJoinPartsupplierSupplierTable();
-    joinPartAndPartsuppByPartkey(OPTIMIZED_QUERY);
+    antiJoinPartsupplierSupplierTable_red();
+    flushDRAM();
+    printf("Anti Join Over\n");
+    fprintf(stderr, "***Anti Join Over***\n");
+    joinPartAndPartsuppByPartkey_red(OPTIMIZED_QUERY);
     flushDRAM();
     printf("joinPartAndPartsuppByPartkey Over\n");
     fprintf(stderr, "***joinPartAndPartsuppByPartkey Over***\n");
@@ -875,10 +774,14 @@ int optimizedQueryExecution_blue(){
     printf("*************************\n");
     printf("\n\n\n\n\n");
     
-    joinPartAndPartsuppByPartkey(OPTIMIZED_QUERY);
+    joinPartAndPartsuppByPartkey_blue(OPTIMIZED_QUERY);
     flushDRAM();
     printf("joinPartAndPartsuppByPartkey Over\n");
     fprintf(stderr, "***joinPartAndPartsuppByPartkey Over***\n");
+    antiJoinPartsupplierSupplierTable_blue();
+    flushDRAM();
+    printf("Anti Join Over\n");
+    fprintf(stderr, "***Anti Join Over***\n");
     aggregateByGB();
     flushDRAM();
     printf("***GroupBy over***\n");
@@ -887,8 +790,8 @@ int optimizedQueryExecution_blue(){
     return (EXIT_SUCCESS);
 }
 int main(int argc, char** argv) {
-   if( argc != 5 ){
-       printf("\n\nUsage: ./pgsqlquery16 <0/1> <tables_dir> <part_sel> <supp_sel>\n\n");
+   if( argc != 6 ){
+       printf("\n\nUsage: ./pgsqlquery16 <0/1> <tables_dir> <part_sel> <supp_sel> <plan (0(red)/1(blue))>\n\n");
        return 1;
    }
    init();
@@ -898,7 +801,7 @@ int main(int argc, char** argv) {
    printf("sizeof (hashEntry) :%u\n", sizeof(GB_hashEntry));
    
    fprintf(stderr, "\n\n\n*************************************\n");
-   fprintf(stderr, "Binary:%s Option [1]:%s [2]:%s [3]:%s [4]:%s\n", argv[0], argv[1], argv[2], argv[3], argv[4]);
+   fprintf(stderr, "Binary:%s Option [1]:%s [2]:%s [3]:%s [4]:%s [5]\n", argv[0], argv[1], argv[2], argv[3], argv[4], argv[5]);
    fprintf(stderr, "*************************************\n\n\n");
    
 #if 1
@@ -922,9 +825,21 @@ int main(int argc, char** argv) {
    
    
    if (strcmp(argv[1], "0") == 0) {
-            postgresQueryExecution_red();
-   } else{
-       optimizedQueryExecution_red();
+       if(strcmp(argv[5], "0") == 0){
+           postgresQueryExecution_red();
+       }else{
+           postgresQueryExecution_blue();
+       }
+   
+       
+   }else{
+       if(strcmp(argv[5], "0") == 0){
+           optimizedQueryExecution_red();
+       }else{
+           optimizedQueryExecution_blue();
+       }
+   
+       
    }
 #else
    postgresQueryExecution();
