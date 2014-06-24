@@ -115,7 +115,7 @@ int scanAndFilterSupplierTable(float selectivityConstant){
     printf("scanAndFilterSupplierTable totalCount: %d Count: %d\n", totalCount, scratchMemoryThreeCount);
     
 }
-int scanAndFilterPartsupplierTable(){
+int scanPartsupplierTable(){
     int fpPartsupp = open(partsupplier_table_file, O_RDONLY);
     assert(fpPartsupp != -1);
     partsupp psitem;
@@ -125,6 +125,7 @@ int scanAndFilterPartsupplierTable(){
         psitemScratch[scratchMemoryFourCount++] = psitem;
     }
     close(fpPartsupp);
+    printf("scanPartsupplierTable Count: %d\n", scratchMemoryFourCount);
 }
 
 
@@ -580,8 +581,8 @@ int main(int argc, char** argv) {
    printf("scanAndFilterPartTable Over\n");
    scanAndFilterSupplierTable(atof(argv[4]));
    printf("scanAndFilterSupplierTable Over\n");
-   scanAndFilterPartsupplierTable();
-   printf("scanAndFilterPartsupplierTable Over\n");
+   scanPartsupplierTable();
+   printf("scanPartsupplierTable Over\n");
    flushDRAM();
    printf("***Scan Over***\n"); 
    fprintf(stderr, "***Scan Over***\n"); 
