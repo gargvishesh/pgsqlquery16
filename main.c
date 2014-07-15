@@ -62,13 +62,22 @@ void init_positions_array(int* pos_array, int numElem) {
         pos_array[i] = i;
     }
 }
-int compare_positions(const void *p1, const void *p2) {
+int compare_positions_aggregation(const void *p1, const void *p2) {
     //char *presentArrayStart = array + (gCurrStart * arrayElemSize);
     POS_ARRAY_TYPE pos1 = *(POS_ARRAY_TYPE*) p1;
     POS_ARRAY_TYPE pos2 = *(POS_ARRAY_TYPE*) p2;
 
     return ( comparePartPartSuppJoinElem(presentArrayStart + (presentTupleSize * pos1), presentArrayStart + (presentTupleSize * pos2)));
 }
+
+int compare_positions_sorting(const void *p1, const void *p2) {
+    //char *presentArrayStart = array + (gCurrStart * arrayElemSize);
+    POS_ARRAY_TYPE pos1 = *(POS_ARRAY_TYPE*) p1;
+    POS_ARRAY_TYPE pos2 = *(POS_ARRAY_TYPE*) p2;
+
+    return ( compareAggregatedPartPartsuppJoinElem(presentArrayStart + (presentTupleSize * pos1), presentArrayStart + (presentTupleSize * pos2)));
+}
+
 #ifdef VMALLOC
 Vmalloc_t *vmPCM; 
 #endif
@@ -404,7 +413,7 @@ void PG_aggregate_by_qsort(memory* inputMemory, memory* outputMemory){
     (*outputCount) = aggregateCount;
     printf("PG_aggregate_by_qsort Count: %d\n", (*outputCount));
 }
-void OPT_aggregate_by_hash_partitioning_and_sorting(memory* inputMemory, memory* outputMemory){
+void OPT_aggregate_by_hash_partitioning_and_sorting(memory* inputMemory, memory* intermediateMemory, memory* outputMemory){
     part_partsupp_join_struct *inputTuples = (part_partsupp_join_struct*)inputMemory->buffer;
     UINT32 *inputCount = &(inputMemory->count);
     aggregated_part_partsupp_join *aggregatedOuputTuples = (aggregated_part_partsupp_join*)outputMemory->buffer;
@@ -412,23 +421,15 @@ void OPT_aggregate_by_hash_partitioning_and_sorting(memory* inputMemory, memory*
     aggregated_part_partsupp_join tempAggregatedOuputTuple ;
     UINT32 aggregateCount = 0;
     UINT32 distinctSuppkeyCount = 0;
-    int *positions = (int *)(scratchMemoryTwo->buffer);
+    int *positions = (int *)(intermediateMemory->buffer);
     UINT32 partitions_for_hash = max(1, 2*((*inputCount)/MAX_THRESHOLD));
     
-#if 0    
+#if 0
     qsort(inputTuples, (*inputCount), sizeof(*inputTuples), comparePartPartSuppJoinElem);
-#else
-    
-#ifdef VMALLOC
-    sortMultiPivotAndUndo(vmPCM, inputTuples, 
-            (*inputCount), 
-            sizeof(*inputTuples), 
-            comparePartPartSuppJoinElem,
-            scratchMemoryTwo,
-            100, 6000);
+
 #else
 int i;
-    
+
 #if 0
     sortMultiHashAndUndo((char*)inputTuples, 
             (*inputCount), 
@@ -443,11 +444,11 @@ int i;
     presentArrayStart = (char*)inputTuples;
     presentTupleSize = sizeof(*inputTuples);
     for (i = 0; i < partitionsCount; i++){
-        qsort(positions + partitionBeginnings[i], partitionBeginnings[i + 1] - partitionBeginnings[i], sizeof (POS_ARRAY_TYPE), compare_positions);
+        qsort(positions + partitionBeginnings[i], partitionBeginnings[i + 1] - partitionBeginnings[i], sizeof (POS_ARRAY_TYPE), compare_positions_aggregation);
     }
+    FREE(partitionBeginnings);
 #endif
     
-#endif
 #endif
     for (i = 0; i < (*inputCount); i++) {
             assert(positions[i] < (*inputCount));
@@ -529,12 +530,13 @@ void PG_sortFinal(memory *ioMemory){
     printf("PG_sortFinal Count: %d\n", (*ioCount));
 }
 
-void sortFinal(memory* inputMemory, memory* outputMemory){
+void sortFinal(memory* inputMemory, memory* intermediateMemory, memory* outputMemory){
     aggregated_part_partsupp_join *inputTuples = (aggregated_part_partsupp_join*)inputMemory->buffer;
     UINT32 *inputCount = &(inputMemory->count);
     aggregated_part_partsupp_join *sortedOutputTuples = (aggregated_part_partsupp_join*)outputMemory->buffer;
     int i;
-    int *positions = (int *)(scratchMemoryTwo->buffer);
+    int *positions = (int *)(intermediateMemory->buffer);
+    UINT32 partitions_for_sort = max(1,2*((*inputCount)/MAX_THRESHOLD));
     
 #ifdef VMALLOC
     sortMultiPivotAndUndo(vmPCM, inputTuples, 
@@ -544,17 +546,32 @@ void sortFinal(memory* inputMemory, memory* outputMemory){
             scratchMemoryTwo, 
             40, 8000);
 #else
+    
+#if 0
     sortMultiPivotAndUndo((char*)inputTuples, 
             (*inputCount), 
             sizeof(*inputTuples), 
             compareAggregatedPartPartsuppJoinElem,
             (char*)positions, 
-            max(1,2*((*inputCount)/MAX_THRESHOLD)), MAX_THRESHOLD/2); //Twicing the number of partitions and halving the threshold to enable safe merge
+            partitions_for_sort, MAX_THRESHOLD/2); //Twicing the number of partitions and halving the threshold to enable safe merge
+#else
+    UINT32 *partitionBeginnings = (UINT32*) MALLOC((partitions_for_sort + 1) * sizeof (int));
+    init_positions_array(positions, *(inputCount));
+    int partitionsCount = partition_with_pivots_using_pos((char*)inputTuples, (*inputCount), sizeof(*inputTuples), compareAggregatedPartPartsuppJoinElem, partitions_for_sort, partitionBeginnings, positions, MAX_THRESHOLD/2);
+    presentArrayStart = (char*)inputTuples;
+    presentTupleSize = sizeof(*inputTuples);
+    for (i = 0; i < partitionsCount; i++){
+        qsort(positions + partitionBeginnings[i], partitionBeginnings[i + 1] - partitionBeginnings[i], sizeof (POS_ARRAY_TYPE), compare_positions_sorting);
+    }
+    FREE(partitionBeginnings);
+#endif
+    
+    
 #endif
     
     int remainingSize = (*inputCount);
     int totalInitialSize = remainingSize;
-    char *currOutPtr = scratchMemoryTwo->buffer;
+    char *currOutPtr = intermediateMemory->buffer;
     
     
 
@@ -695,11 +712,11 @@ int optimizedQueryExecution(){
     flushDRAM();
     printf("joinPartAndPartsuppByPartkey Over\n");
     fprintf(stderr, "***joinPartAndPartsuppByPartkey Over***\n");
-    OPT_aggregate_by_hash_partitioning_and_sorting(scratchMemoryFive, scratchMemoryOne);
+    OPT_aggregate_by_hash_partitioning_and_sorting(scratchMemoryFive, scratchMemoryTwo, scratchMemoryOne);
     flushDRAM();
     printf("***GroupBy over***\n");
     fprintf(stderr, "***GroupBy over***\n");
-    sortFinal(scratchMemoryOne, scratchMemoryOne);
+    sortFinal(scratchMemoryOne, scratchMemoryTwo, scratchMemoryOne);
     return (EXIT_SUCCESS);
 }
 #if 0
