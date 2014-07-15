@@ -22,6 +22,8 @@
 #include "constants.h"
 #include "GB_hashTable.h"
 #include "GeneralHashFunctions.h"
+#include "partitioning.h"
+
 //#include "clock.h"
 
 #define POSTGRES_QUERY 0
@@ -51,6 +53,22 @@ char part_table_file[100];
 char supplier_table_file[100];
 char partsupplier_table_file[100];
 
+char *presentArrayStart; //Used for finding the beginning of the array in question while comparing elements at two pos
+UINT32 presentTupleSize;
+
+void init_positions_array(int* pos_array, int numElem) {
+    int i;
+    for (i = 0; i < numElem; i++) {
+        pos_array[i] = i;
+    }
+}
+int compare_positions(const void *p1, const void *p2) {
+    //char *presentArrayStart = array + (gCurrStart * arrayElemSize);
+    POS_ARRAY_TYPE pos1 = *(POS_ARRAY_TYPE*) p1;
+    POS_ARRAY_TYPE pos2 = *(POS_ARRAY_TYPE*) p2;
+
+    return ( comparePartPartSuppJoinElem(presentArrayStart + (presentTupleSize * pos1), presentArrayStart + (presentTupleSize * pos2)));
+}
 #ifdef VMALLOC
 Vmalloc_t *vmPCM; 
 #endif
@@ -395,10 +413,12 @@ void OPT_aggregate_by_hash_partitioning_and_sorting(memory* inputMemory, memory*
     UINT32 aggregateCount = 0;
     UINT32 distinctSuppkeyCount = 0;
     int *positions = (int *)(scratchMemoryTwo->buffer);
+    UINT32 partitions_for_hash = max(1, 2*((*inputCount)/MAX_THRESHOLD));
     
 #if 0    
     qsort(inputTuples, (*inputCount), sizeof(*inputTuples), comparePartPartSuppJoinElem);
 #else
+    
 #ifdef VMALLOC
     sortMultiPivotAndUndo(vmPCM, inputTuples, 
             (*inputCount), 
@@ -407,15 +427,28 @@ void OPT_aggregate_by_hash_partitioning_and_sorting(memory* inputMemory, memory*
             scratchMemoryTwo,
             100, 6000);
 #else
+int i;
+    
+#if 0
     sortMultiHashAndUndo((char*)inputTuples, 
             (*inputCount), 
             sizeof(*inputTuples), 
             comparePartPartSuppJoinElem,
             (char*)positions,
-            max(1, 2*((*inputCount)/MAX_THRESHOLD)), MAX_THRESHOLD/2, hashValue_from_ptr);
+            partitions_for_hash, MAX_THRESHOLD/2, hashValue_from_ptr);
+#else
+    UINT32 *partitionBeginnings = (UINT32*) MALLOC((partitions_for_hash + 1) * sizeof (int));
+    init_positions_array(positions, *(inputCount));
+    int partitionsCount = partition_with_hash_using_pos((char*)inputTuples, (*inputCount), sizeof(*inputTuples), comparePartPartSuppJoinElem, partitions_for_hash, partitionBeginnings, positions, MAX_THRESHOLD/2, hashValue_from_ptr);
+    presentArrayStart = (char*)inputTuples;
+    presentTupleSize = sizeof(*inputTuples);
+    for (i = 0; i < partitionsCount; i++){
+        qsort(positions + partitionBeginnings[i], partitionBeginnings[i + 1] - partitionBeginnings[i], sizeof (POS_ARRAY_TYPE), compare_positions);
+    }
+#endif
+    
 #endif
 #endif
-    int i;
     for (i = 0; i < (*inputCount); i++) {
             assert(positions[i] < (*inputCount));
             strncpy(tempAggregatedOuputTuple.p_brand, inputTuples[positions[i]].p_brand, sizeof(inputTuples[positions[i]].p_brand));
@@ -485,7 +518,7 @@ void PG_sortFinal(memory *ioMemory){
     int *ioCount = &(ioMemory->count);
     qsort(inputTuples, (*ioCount), sizeof(*inputTuples), compareAggregatedPartPartsuppJoinElem);
     int i;
-#if 1
+#if 0
     for (i = 0; i < (*ioCount); i++) {
         printf("Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", inputTuples[i].p_brand,
                 inputTuples[i].p_type,
@@ -525,7 +558,7 @@ void sortFinal(memory* inputMemory, memory* outputMemory){
     
     
 
-#if 1
+#if 0
     for (i = 0; i < totalInitialSize; i++) {
         assert(positions[i] < totalInitialSize);
         printf("Brand: %s Type: %s, Size: %d suppkeyCount:%d\n", sortedOutputTuples[positions[i]].p_brand,
